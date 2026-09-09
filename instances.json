@@ -1,0 +1,22 @@
+{
+  "In1": {
+    "greeting_lines": [
+      "Welcome to Freedom Host {name}!",
+      "- You can initiate a vote kick by: /votekick <Player Slot>",
+      "- Vote by /vote y or /vote n",
+      "- Player will be kicked if 100% of the votes count to YES.",
+      "------------------------------------------------------------",
+      "PLEASE READ:",
+      "Due to the unmoderated nature of this environment you could encounter languages and behaviours by other players that you may find insulting or uncomfortable. If you are new to multiplayer, you are adviced to communicate with your team in advance.",
+      "You should also consider spectating games or practice with bots in Autohost, should you want to improve your skills before joining.",
+      "------------------------------------------------------------",
+      "By staying in this host, you agree to the above terms."
+    ],
+    "map_name": "NTW-Full2v2",
+    "authorized_pkeys": [
+      "8MDd59x68B5Q7HM51s5rwxH5U4q6RW/+g+80cwOqPrI=",
+      "MCBF7QzQMsmVUXKFHL4rNXLo9dX8znqv39AclP9JJ/g=",
+      "D3bbWoBU3V1RrVT5tZZbTjlBEd9m3mPk+4w6ViOdMmc="
+    ]
+  }
+}
