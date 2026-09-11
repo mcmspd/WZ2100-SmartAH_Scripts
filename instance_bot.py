@@ -5,11 +5,10 @@ instance_bot.py — Warzone 2100 per-instance bot.
 Spawns a single WZ2100 instance process, monitors its output in real-time,
 and reacts to game events (e.g. greeting players on join, vote-kick).
 
-Greeting lines and all instance parameters are read from instances.json.
-This script is normally launched by manager.py inside a tmux session, but
-can also be run standalone:
+All parameters are read from instances.json (flat config, no instance name key).
+This script can be run standalone with no arguments:
 
-    python3 instance_bot.py <instance_name>
+    python3 instance_bot.py [port] [session_name] [map_name]
 """
 
 import base64
@@ -47,7 +46,6 @@ process  = None   # Active WZ2100 subprocess
 config   = {}     # Loaded instance config dict
 greetings = []    # List of greeting line strings
 log_file_handle = None # Global file handle for appending logs
-instance_name_global = ""
 port_global = 0
 session_global = ""
 quit_after_game = False
@@ -181,14 +179,16 @@ def generate_configs(map_name: str, configdir: str, gameName: str):
         
     return ah_name
 
-def spawn_new_instance(base_name: str, map_name: str):
-    log("INFO", f"Spawning new instance of {base_name} with map {map_name}")
+def spawn_new_instance(map_name: str):
+    """Launch a fresh bot instance in a new tmux session."""
+    log("INFO", f"Spawning new instance with map {map_name}")
     port = find_available_port(2100)
-    session_name = f"WZ_{base_name}_{port}"
+    session_name = f"WZ_{port}"
     # Run tmux new-session via subprocess
     cmd = [
         "tmux", "new-session", "-d", "-s", session_name,
-        "python3", os.path.join(SCRIPT_DIR, "instance_bot.py"), base_name, str(port), session_name, map_name
+        "python3", os.path.join(SCRIPT_DIR, "instance_bot.py"),
+        str(port), session_name, map_name
     ]
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -256,7 +256,7 @@ def save_authorized_pkeys():
     try:
         with open(CONFIG_FILE, "r") as f:
             data = json.load(f)
-        data[instance_name_global]["authorized_pkeys"] = config.get("authorized_pkeys", [])
+        data["authorized_pkeys"] = config.get("authorized_pkeys", [])
         with open(CONFIG_FILE, "w") as f:
             json.dump(data, f, indent=2)
             f.write("\n")
@@ -277,23 +277,13 @@ def log(tag: str, msg: str):
         log_file_handle.flush()
 
 
-def load_instances() -> dict:
-    """Load and return all instances from instances.json."""
+def load_config() -> dict:
+    """Load and return the flat config from instances.json."""
     if not os.path.exists(CONFIG_FILE):
         print(f"[ERROR] {CONFIG_FILE} not found.")
         sys.exit(1)
     with open(CONFIG_FILE) as f:
         return json.load(f)
-
-
-def load_instance(instance_name: str) -> dict:
-    """Load a single named instance from instances.json."""
-    data = load_instances()
-    if instance_name not in data:
-        print(f"[ERROR] Instance '{instance_name}' not found in instances.json.")
-        print(f"        Available: {', '.join(data.keys())}")
-        sys.exit(1)
-    return data[instance_name]
 
 # ─── Roster Management ────────────────────────────────────────────────────────
 
@@ -407,7 +397,7 @@ def _start_timeout_expired():
         if process is None or process.poll() is not None:
             return
     log("TIMEOUT", "90-minute start window expired. Spawning new instance and shutting down.")
-    spawn_new_instance(instance_name_global, config.get("map_name", ""))
+    spawn_new_instance(config.get("map_name", ""))
     time.sleep(30)
     with roster_lock:
         roster_snapshot = list(roster.items())
@@ -791,7 +781,7 @@ def on_chat_cmd(line: str):
             return
             
         bcast(f"Map change to {new_map} requested by {sender_name}. Restarting lobby in 30 seconds...")
-        spawn_new_instance(instance_name_global, new_map)
+        spawn_new_instance(new_map)
         time.sleep(30)
         # Kick everyone
         with roster_lock:
@@ -967,7 +957,7 @@ def process_line(line: str):
         global quit_after_game
         quit_after_game = True
         # Spawn new instance shortly after game starts
-        threading.Timer(5.0, lambda: spawn_new_instance(instance_name_global, config.get("map_name", ""))).start()
+        threading.Timer(5.0, lambda: spawn_new_instance(config.get("map_name", ""))).start()
     elif line.startswith("WZEVENT: lag-kick:"):
         log("EVENT", "Lag kick: " + line[len("WZEVENT: "):])
     elif line.startswith("WZEVENT: notready-kick:"):
@@ -1048,9 +1038,47 @@ def stdin_reader():
         if raw:
             send_cmd(raw.strip())
 
+# ─── WZ Installation Detection ───────────────────────────────────────────────
+
+def detect_wz_install() -> str:
+    """
+    Detect how Warzone 2100 is installed.
+    Returns 'flatpak' if the flatpak package is found,
+    'system' if a system binary (e.g. from apt) is available,
+    or raises RuntimeError if neither is found.
+    """
+    # Check for flatpak installation
+    try:
+        result = subprocess.run(
+            ["flatpak", "info", "net.wz2100.wz2100"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            log("INFO", "Warzone 2100 detected: flatpak (net.wz2100.wz2100)")
+            return "flatpak"
+    except FileNotFoundError:
+        pass  # flatpak not installed at all
+
+    # Check for system binary
+    try:
+        result = subprocess.run(
+            ["which", "warzone2100"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            log("INFO", f"Warzone 2100 detected: system binary ({result.stdout.strip()})")
+            return "system"
+    except FileNotFoundError:
+        pass
+
+    raise RuntimeError(
+        "Warzone 2100 not found. Install via flatpak (net.wz2100.wz2100) or apt (warzone2100)."
+    )
+
+
 # ─── Process Lifecycle ────────────────────────────────────────────────────────
 
-def build_command() -> list:
+def build_command(wz_install: str) -> list:
     global port_global, session_global
     configdir = os.path.join(SCRIPT_DIR, "instance_configs", session_global)
     map_name = config.get("map_name", "NTW-Full2v2")
@@ -1059,11 +1087,9 @@ def build_command() -> list:
         ah_config_name = f"AH_{map_name}"
 
     log("INFO", f"Config dir: {configdir}")
+    log("INFO", f"WZ install : {wz_install}")
 
-    return [
-        "flatpak", "run",
-        f"--filesystem={configdir}",
-        "net.wz2100.wz2100",
+    common_args = [
         "--headless",
         "--nosound",
         f"--configdir={configdir}",
@@ -1071,6 +1097,15 @@ def build_command() -> list:
         f"--gameport={port_global}",
         "--enablecmdinterface=stdin",
     ]
+
+    if wz_install == "flatpak":
+        return [
+            "flatpak", "run",
+            f"--filesystem={configdir}",
+            "net.wz2100.wz2100",
+        ] + common_args
+    else:  # system binary
+        return ["warzone2100"] + common_args
 def shutdown(signum=None, frame=None):
     global start_timeout_timer
     log("INFO", "Shutting down...")
@@ -1096,32 +1131,24 @@ def shutdown(signum=None, frame=None):
 
 def main():
     global process, config, greetings, log_file_handle, game_started, start_timeout_timer
-    global instance_name_global, port_global, session_global, quit_after_game
+    global port_global, session_global, quit_after_game
     global instance_start_time
 
-    if len(sys.argv) < 2:
-        print(f"Usage: python3 {os.path.basename(__file__)} <instance_name> [port] [session]")
-        sys.exit(1)
+    # Args: [port] [session_name] [map_name]  — all optional, normally set by spawner
+    port_global    = int(sys.argv[1]) if len(sys.argv) > 1 else find_available_port(2100)
+    session_global = sys.argv[2]      if len(sys.argv) > 2 else f"WZ_{port_global}"
 
-    instance_name = sys.argv[1]
-    instance_name_global = instance_name
-    config = load_instance(instance_name)
-    
-    port_global = int(sys.argv[2]) if len(sys.argv) > 2 else find_available_port(2100)
-    session_global = sys.argv[3] if len(sys.argv) > 3 else f"WZ_{instance_name}_{port_global}"
+    config = load_config()
 
-    # Override map name if provided as an arg? Or we just read from config.
-    # Actually, spawn_new_instance sets the map name by temporarily writing to instances.json?
-    # No, we can pass map name as the 4th argument!
-    if len(sys.argv) > 4:
-        config["map_name"] = sys.argv[4]
+    # map_name can be overridden by the spawner as the 3rd argument
+    if len(sys.argv) > 3:
+        config["map_name"] = sys.argv[3]
 
     log_path = os.path.join(SCRIPT_DIR, f"{session_global}.log")
     log_file_handle = open(log_path, "a", encoding="utf-8")
 
     greetings = config.get("greeting_lines", [])
 
-    log("INFO", f"Instance      : {instance_name}")
     log("INFO", f"Session       : {session_global}")
     log("INFO", f"Port          : {port_global}")
     log("INFO", f"Map           : {config.get('map_name')}")
@@ -1131,7 +1158,13 @@ def main():
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    cmd = build_command()
+    try:
+        wz_install = detect_wz_install()
+    except RuntimeError as e:
+        log("ERROR", str(e))
+        sys.exit(1)
+
+    cmd = build_command(wz_install)
     log("INFO", "Command: " + " ".join(cmd))
 
     in_reader = threading.Thread(target=stdin_reader, daemon=True)
@@ -1171,12 +1204,10 @@ def main():
             start_timeout_timer = None
 
     log("INFO", f"Process exited (code {process.returncode}).")
-    
+
     if not quit_after_game:
-        # If it crashed and game didn't start, wait and exit so manager can restart it?
-        # Actually, let it just exit. Manager can restart it, or we just spawn a new one.
-        log("INFO", "Process crashed unexpectedly? Spawning new instance.")
-        spawn_new_instance(instance_name_global, config.get("map_name", ""))
+        log("INFO", "Process crashed unexpectedly. Spawning new instance.")
+        spawn_new_instance(config.get("map_name", ""))
 
     log_file_handle.close()
     sys.exit(0)
