@@ -116,7 +116,15 @@ def extract_map_info(map_name: str) -> dict:
         log("WARN", f"Failed to extract map info: {e}")
         return None
 
-def generate_configs(map_name: str, configdir: str, host_name: str, game_name: str):
+def generate_configs(
+    map_name: str,
+    configdir: str,
+    host_name: str,
+    game_name: str,
+    desync_kick_seconds: int = 30,
+    lag_kick_seconds: int = 30,
+    not_ready_kick_seconds: int = 30,
+):
     info = extract_map_info(map_name)
     if not info:
         return False
@@ -132,9 +140,9 @@ def generate_configs(map_name: str, configdir: str, host_name: str, game_name: s
         f.write(f"playerName={host_name}\n")
         f.write("antialiasing=0\n")
         f.write("fog=false\n")
-        f.write("hostAutoDesyncKickSeconds=30\n")
-        f.write("hostAutoLagKickSeconds=30\n")
-        f.write("hostAutoNotReadyKickSeconds=30\n")
+        f.write(f"hostAutoDesyncKickSeconds={desync_kick_seconds}\n")
+        f.write(f"hostAutoLagKickSeconds={lag_kick_seconds}\n")
+        f.write(f"hostAutoNotReadyKickSeconds={not_ready_kick_seconds}\n")
         f.write("rotateRadar=false\n")
         f.write("shadows=0\n")
         f.write("sound=0\n")
@@ -1181,7 +1189,15 @@ def build_command(wz_install: str) -> list:
     map_name = config.get("map_name")
     host_name = config.get("host_name")
     game_name = config.get("game_name")
-    ah_config_name = generate_configs(map_name, configdir, host_name, game_name)
+    ah_config_name = generate_configs(
+        map_name,
+        configdir,
+        host_name,
+        game_name,
+        config.get("host_auto_desync_kick_seconds", 30),
+        config.get("host_auto_lag_kick_seconds", 30),
+        config.get("host_auto_not_ready_kick_seconds", 30),
+    )
     if not ah_config_name:
         ah_config_name = f"AH_{map_name}"
 

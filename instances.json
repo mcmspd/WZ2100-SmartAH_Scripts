@@ -1,6 +1,9 @@
 {
   "host_name": "FreeHost",
   "game_name": "Server Testing",
+  "host_auto_desync_kick_seconds": 60,
+  "host_auto_lag_kick_seconds": 60,
+  "host_auto_not_ready_kick_seconds": 30,
   "greeting_lines": [
     "Welcome to Freedom Host {name}!",
     "- You can initiate a vote kick by: /votekick <Player Slot>",
