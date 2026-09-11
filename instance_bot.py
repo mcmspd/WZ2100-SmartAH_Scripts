@@ -937,6 +937,10 @@ def on_room_status(line: str):
 
         json_str = line[start:end]
         status = json.loads(json_str)
+        log("STATUS", "__WZROOMSTATUS__")
+        for formatted_line in json.dumps(status, indent=2, ensure_ascii=False).splitlines():
+            log("STATUS", formatted_line)
+        log("STATUS", "__ENDWZROOMSTATUS__")
         update_roster_from_status(status)
     except json.JSONDecodeError as e:
         log("WARN", f"Failed to parse room status JSON: {e}")
