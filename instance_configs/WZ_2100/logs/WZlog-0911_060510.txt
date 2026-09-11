@@ -1,7 +1,0 @@
---- Starting log [[USER_HOME]/Documents/Mod_Res/Autohost/instance_configs/WZ_2100/logs/WZlog-0911_060510.txt]---
-info    |06:05:10: [ParseCommandLine:1108] Games will be hosted on port [2100]
-info    |06:05:10: [wzAttemptInitializeBackend:3128] Attempting to initialize backend: (headless)
-info    |06:05:10: [determineDefaultTerrainQuality:1912] Due to null gfx backend, defaulting to terrain quality: Normal
-info    |06:05:10: [initTerrainShaderType:2005] Defaulting terrain quality to: Normal
-info    |06:05:10: [determineDefaultTerrainQuality:1912] Due to null gfx backend, defaulting to terrain quality: Normal
-info    |06:05:10: [NEThostGame:4623] Opening listening socket (backend: tcp)
