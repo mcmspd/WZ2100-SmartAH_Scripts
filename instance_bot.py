@@ -924,10 +924,6 @@ def on_room_status(line: str):
     Handle: __WZROOMSTATUS__{...}__ENDWZROOMSTATUS__
     Logs the full raw line and parses the JSON to update the roster.
     """
-    # ALWAYS log the full raw status line so it appears in the log file
-    # and manager.py can read it
-    log("STATUS", line)
-
     try:
         start = line.find("__WZROOMSTATUS__") + len("__WZROOMSTATUS__")
         end = line.find("__ENDWZROOMSTATUS__")
@@ -937,10 +933,32 @@ def on_room_status(line: str):
 
         json_str = line[start:end]
         status = json.loads(json_str)
-        log("STATUS", "__WZROOMSTATUS__")
-        for formatted_line in json.dumps(status, indent=2, ensure_ascii=False).splitlines():
-            log("STATUS", formatted_line)
-        log("STATUS", "__ENDWZROOMSTATUS__")
+        players = [
+            entry for entry in status.get("players", [])
+            if entry.get("type") == "player"
+        ]
+        spectators = [
+            entry for entry in status.get("specs", [])
+            if entry.get("type") == "spec"
+        ]
+        log(
+            "STATUS",
+            f"state={status.get('state', '?')} | map={status.get('map', '?')} | "
+            f"players={len(players)} | spectators={len(spectators)}",
+        )
+        log("STATUS", "POS | TYPE | NAME | PUBLIC KEY")
+        for entry in players:
+            log(
+                "STATUS",
+                f"{entry.get('pos', '-')} | PLAYER | "
+                f"{entry.get('name', '?')} | {entry.get('pk', '-')}",
+            )
+        for entry in spectators:
+            log(
+                "STATUS",
+                f"- | SPECTATOR | "
+                f"{entry.get('name', '?')} | {entry.get('pk', '-')}",
+            )
         update_roster_from_status(status)
     except json.JSONDecodeError as e:
         log("WARN", f"Failed to parse room status JSON: {e}")
