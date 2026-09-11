@@ -983,6 +983,7 @@ def on_room_status(line: str):
                 "PLAYER",
                 str(entry.get("name", "?")),
                 str(entry.get("pk", "-")),
+                str(entry.get("ip") or "-"),
             )
             for entry in players
         ] + [
@@ -991,10 +992,11 @@ def on_room_status(line: str):
                 "SPECTATOR",
                 str(entry.get("name", "?")),
                 str(entry.get("pk", "-")),
+                str(entry.get("ip") or "-"),
             )
             for entry in spectators
         ]
-        headers = ("POS", "TYPE", "NAME", "PUBLIC KEY")
+        headers = ("POS", "TYPE", "NAME", "PUBLIC KEY", "IP")
         widths = [
             max([len(headers[index])] + [len(row[index]) for row in rows])
             for index in range(len(headers))
