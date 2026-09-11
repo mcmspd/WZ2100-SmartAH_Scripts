@@ -1,0 +1,28 @@
+[06:05:10] [INFO] Session       : WZ_2100
+[06:05:10] [INFO] Port          : 2100
+[06:05:10] [INFO] Map           : NTW-Full2v2
+[06:05:10] [INFO] Warzone 2100 detected: flatpak (net.wz2100.wz2100)
+[06:05:10] [INFO] Config dir: /home/mikespider/Documents/Mod_Res/Autohost/instance_configs/WZ_2100
+[06:05:10] [INFO] WZ install : flatpak
+[06:05:10] [INFO] Command: flatpak run --filesystem=/home/mikespider/Documents/Mod_Res/Autohost/instance_configs/WZ_2100 net.wz2100.wz2100 --headless --nosound --configdir=/home/mikespider/Documents/Mod_Res/Autohost/instance_configs/WZ_2100 --autohost=AH_NTW-Full2v2 --gameport=2100 --enablecmdinterface=stdin
+[06:05:10] [INFO] Process started (PID 36663)
+[06:05:10] [WZ] info    |06:05:10: [ParseCommandLine:1108] Games will be hosted on port [2100]
+[06:05:10] [WZ] --------------------------------------------------------------------------------------
+[06:05:10] [WZ]  * Warzone 2100 - Headless Mode
+[06:05:10] [WZ]  * Version: 4.7.0, Built: 2026-04-07
+[06:05:10] [WZ] --------------------------------------------------------------------------------------
+[06:05:10] [WZ] info    |06:05:10: [wzAttemptInitializeBackend:3128] Attempting to initialize backend: (headless)
+[06:05:10] [WZ] info    |06:05:10: [determineDefaultTerrainQuality:1912] Due to null gfx backend, defaulting to terrain quality: Normal
+[06:05:10] [WZ] info    |06:05:10: [initTerrainShaderType:2005] Defaulting terrain quality to: Normal
+[06:05:10] [WZ] info    |06:05:10: [determineDefaultTerrainQuality:1912] Due to null gfx backend, defaulting to terrain quality: Normal
+[06:05:10] [WZ] sh: line 1: xdg-mime: command not found
+[06:05:10] [INFO] stdin command interface ready.
+[06:05:10] [WZ] info    |06:05:10: [NEThostGame:4623] Opening listening socket (backend: tcp)
+[06:05:10] [EVENT] readyStatus=1: 13 +V3Y7xMyvAhHegT28UINQV/pi+3G/onLYx2qmWAp258= 20e4e866dfbf486b71f1f13ec46af60c19ad29c364e39ab260d396e98609ca61 ? RnJlZWRvbUhvc3Q= 
+[06:05:10] [STATUS] __WZROOMSTATUS__{"ver":1,"data":{"state":"lobby","map":"NTW-Full2v2","blind":0,"unixtime":1789128310},"players":[{"pos":0,"team":0,"col":4,"fact":0,"type":"open"},{"pos":1,"team":0,"col":1,"fact":0,"type":"open"},{"pos":2,"team":1,"col":7,"fact":0,"type":"open"},{"pos":3,"team":1,"col":2,"fact":0,"type":"open"}],"specs":[{"type":"spec","name":"FreedomHost","ready":1,"joinedfor":0,"readyfor":0,"notreadyfor":0,"pk":"+V3Y7xMyvAhHegT28UINQV/pi+3G/onLYx2qmWAp258=","ip":"","ping":0,"admin":1,"host":1,"prefs":{"players":{"max":10,"min":2}}},{"type":"open"},{"type":"open"},{"type":"open"},{"type":"open"},{"type":"open"},{"type":"open"},{"type":"open"},{"type":"open"},{"type":"open"}]}__ENDWZROOMSTATUS__
+[06:05:10] [ROSTER] Updated: 1 entries (0 players, 1 specs)
+[06:05:13] [INFO] Shutting down...
+[06:05:13] [CMD->] shutdown now
+[06:05:13] [WZ] WZCMD info: shutdown now command received - shutting down
+[06:05:13] [EVENT] readyStatus=RESET
+[06:05:15] [READER] Output reader thread exited.

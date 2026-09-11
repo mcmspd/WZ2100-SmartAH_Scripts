@@ -1,0 +1,116 @@
+NETPLAY log: Fri Sep 11 06:05:10 2026
+-----------------------------------------------------------
+Fri Sep 11 06:05:10 2026 # Hosting game, resetting ban list. 	: 0 	(Sync)
+Fri Sep 11 06:05:10 2026 # A new player has been created. Player, FreedomHost, is set to slot 13 	: 13 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 14 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 15 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 16 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 17 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 18 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 19 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 20 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 21 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 22 	(Sync)
+Fri Sep 11 06:05:10 2026 # Sending player's info to all players 	: 13 	(Sync)
+-----------------------------------------------------------
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 0 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 1 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 2 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 3 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 4 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 5 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 6 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 7 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 8 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 9 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 10 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 11 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 12 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 13 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 14 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 15 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 16 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 17 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 18 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 19 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 20 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 21 	(Sync)
+Fri Sep 11 06:05:13 2026 # Freeing slot for a new player. 	: 22 	(Sync)
+Fri Sep 11 06:05:13 2026 # NETshutdown 	: 13 	(Sync)
+NET_MIN_TYPE            :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PING                :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PLAYER_STATS        :	 received 0 times, 0 bytes; sent 2 times, 54 bytes
+NET_TEXTMSG             :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PLAYERRESPONDING    :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_OPTIONS             :	 received 0 times, 0 bytes; sent 1 times, 230 bytes
+NET_KICK                :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_FIREUP              :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_COLOURREQUEST       :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_FACTIONREQUEST      :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_AITEXTMSG           :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_BEACONMSG           :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_TEAMREQUEST         :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_JOIN                :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_ACCEPTED            :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PLAYER_INFO         :	 received 0 times, 0 bytes; sent 10 times, 211 bytes
+NET_PLAYER_JOINED       :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PLAYER_LEAVING      :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PLAYER_DROPPED      :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_GAME_FLAGS          :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_READY_REQUEST       :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_REJECTED            :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_POSITIONREQUEST     :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_DATA_CHECK          :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_HOST_DROPPED        :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_SEND_TO_PLAYER      :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_SHARE_GAME_QUEUE    :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_FILE_REQUESTED      :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_FILE_CANCELLED      :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_FILE_PAYLOAD        :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_DEBUG_SYNC          :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_VOTE                :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_VOTE_REQUEST        :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_SPECTEXTMSG         :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PLAYERNAME_CHANGEREQUEST:	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PLAYER_SLOTTYPE_REQUEST:	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PLAYER_SWAP_INDEX   :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_PLAYER_SWAP_INDEX_ACK:	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_DATA_CHECK2         :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_SECURED_NET_MESSAGE :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_TEAM_STRATEGY       :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_QUICK_CHAT_MSG      :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+NET_HOST_CONFIG         :	 received 0 times, 0 bytes; sent 1 times, 38 bytes
+NET_MAX_TYPE            :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_MIN_TYPE           :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DROIDINFO          :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_STRUCTUREINFO      :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_RESEARCHSTATUS     :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_TEMPLATE           :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_TEMPLATEDEST       :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_ALLIANCE           :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_GIFT               :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_LASSAT             :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_GAME_TIME          :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_PLAYER_LEFT        :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DROIDDISEMBARK     :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_SYNC_REQUEST       :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DEBUG_MODE         :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DEBUG_ADD_DROID    :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DEBUG_ADD_STRUCTURE:	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DEBUG_ADD_FEATURE  :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DEBUG_REMOVE_DROID :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DEBUG_REMOVE_STRUCTURE:	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DEBUG_REMOVE_FEATURE:	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_DEBUG_FINISH_RESEARCH:	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_SYNC_OPT_CHANGE    :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+GAME_MAX_TYPE           :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+REPLAY_ENDED            :	 received 0 times, 0 bytes; sent 0 times, 0 bytes
+== Total bytes sent 533, Total bytes received 0 ==
+== Total packets sent 14, recv 0 ==
+
+-Sync statistics -
+-----------------------------------------------------------
+joins: 1, kicks: 0, drops: 0, left 0
+banned: 0, cantjoin: 0, rejected: 0
+-----------------------------------------------------------
+-----------------------------------------------------------

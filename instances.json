@@ -1,6 +1,6 @@
 {
-  "host_name": "FreedomHost",
-  "game_name": "FreedomHost",
+  "host_name": "FreeHost",
+  "game_name": "Server Testing",
   "greeting_lines": [
     "Welcome to Freedom Host {name}!",
     "- You can initiate a vote kick by: /votekick <Player Slot>",
@@ -13,7 +13,7 @@
     "------------------------------------------------------------",
     "By staying in this host, you agree to the above terms."
   ],
-  "map_name": "NTW-Full2v2",
+  "map_name": "NTW_3v3Full",
   "authorized_pkeys": [
     "8MDd59x68B5Q7HM51s5rwxH5U4q6RW/+g+80cwOqPrI=",
     "MCBF7QzQMsmVUXKFHL4rNXLo9dX8znqv39AclP9JJ/g=",
