@@ -688,7 +688,7 @@ def on_player_join(line: str):
     except Exception:
         player_name = b64name
 
-    log("JOIN", f"Slot {slot} | '{player_name}' | {ip}")
+    log("JOIN", f"{player_name} {b64pubkey} {ip}")
 
     for line_template in greetings:
         msg = line_template.format(name=player_name)
@@ -1061,6 +1061,9 @@ def process_line(line: str):
         on_chat_cmd(line)
     elif line.startswith("WZCHAT:"):
         on_chat_message(line)
+    elif "[NETallowJoining:" in line and " has joined, IP is:" in line:
+        # The corresponding WZEVENT: player join line contains the pkey.
+        return
     elif "__WZROOMSTATUS__" in line and "__ENDWZROOMSTATUS__" in line:
         on_room_status(line)
     else:
