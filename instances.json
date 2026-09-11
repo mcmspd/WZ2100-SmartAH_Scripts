@@ -4,6 +4,7 @@
   "host_auto_desync_kick_seconds": 60,
   "host_auto_lag_kick_seconds": 60,
   "host_auto_not_ready_kick_seconds": 30,
+  "game_password": "",
   "greeting_lines": [
     "Welcome to Freedom Host {name}!",
     "- You can initiate a vote kick by: /votekick <Player Slot>",

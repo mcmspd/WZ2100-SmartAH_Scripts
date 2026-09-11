@@ -124,6 +124,7 @@ def generate_configs(
     desync_kick_seconds: int = 30,
     lag_kick_seconds: int = 30,
     not_ready_kick_seconds: int = 30,
+    game_password: str = "",
 ):
     info = extract_map_info(map_name)
     if not info:
@@ -155,21 +156,25 @@ def generate_configs(
     ah_name = f"AH_{map_name}"
     ah_path = os.path.join(ah_dir, ah_name)
     
+    challenge = {
+        "map": map_name,
+        "maxPlayers": players,
+        "scavengers": 0,
+        "alliances": 3,
+        "powerLevel": 2,
+        "bases": 3,
+        "name": game_name,
+        "techLevel": 1,
+        "spectatorHost": True,
+        "openSpectatorSlots": 10,
+        "blindMode": "none",
+    }
+    if game_password:
+        challenge["gamePassword"] = game_password
+
     ah_data = {
         "locked": {"power": True, "alliances": True, "teams": True, "difficulty": False, "ai": False, "scavengers": True, "position": False, "bases": True},
-        "challenge": {
-            "map": map_name,
-            "maxPlayers": players,
-            "scavengers": 0,
-            "alliances": 3,
-            "powerLevel": 2,
-            "bases": 3,
-            "name": game_name,
-            "techLevel": 1,
-            "spectatorHost": True,
-            "openSpectatorSlots": 10,
-            "blindMode": "none"
-        }
+        "challenge": challenge,
     }
     
     # Generate teams based on 2 teams
@@ -1197,6 +1202,7 @@ def build_command(wz_install: str) -> list:
         config.get("host_auto_desync_kick_seconds", 30),
         config.get("host_auto_lag_kick_seconds", 30),
         config.get("host_auto_not_ready_kick_seconds", 30),
+        config.get("game_password", ""),
     )
     if not ah_config_name:
         ah_config_name = f"AH_{map_name}"
