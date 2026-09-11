@@ -52,9 +52,8 @@ port_global = 0
 session_global = ""
 quit_after_game = False
 lobby_id = None
-lobby_id_event = threading.Event()
-startup_failure = None
-startup_failure_event = threading.Event()
+startup_status_event = threading.Event()
+startup_error = None
 
 
 # Roster: pk (str) -> {"type": str, "name": str, "pos": int|None, "is_spec": bool}
@@ -947,7 +946,7 @@ def on_room_status(line: str):
 
 def process_line(line: str):
     """Route a single line to the correct handler."""
-    global game_started, start_timeout_timer
+    global game_started, start_timeout_timer, lobby_id, startup_error
 
     if line.startswith("WZEVENT: player join:"):
         on_player_join(line)
@@ -969,18 +968,16 @@ def process_line(line: str):
     elif line.startswith("WZEVENT: notready-kick:"):
         log("EVENT", "Not-ready kick: " + line[len("WZEVENT: "):])
     elif line.startswith("WZEVENT: lobbyid:"):
-        global lobby_id
         lobby_id = line.split(":", 2)[-1].strip()
         if lobby_id:
             log("EVENT", "Lobby ID: " + lobby_id)
-            lobby_id_event.set()
+            startup_status_event.set()
         else:
             log("WARN", "Received an empty lobby ID.")
     elif line.startswith("WZEVENT: lobbyerror"):
-        global startup_failure
-        startup_failure = line[len("WZEVENT: "):].strip()
-        log("ERROR", f"Lobby startup error: {startup_failure}")
-        startup_failure_event.set()
+        startup_error = line[len("WZEVENT: "):].strip()
+        log("ERROR", f"Lobby startup error: {startup_error}")
+        startup_status_event.set()
     elif line.startswith("WZEVENT:"):
         log("EVENT", line[len("WZEVENT: "):])
     elif line.startswith("WZCMD: stdinReadReady"):
@@ -1152,7 +1149,7 @@ def main():
     global process, config, greetings, log_file_handle, game_started, start_timeout_timer
     global port_global, session_global, quit_after_game
     global instance_start_time
-    global lobby_id, startup_failure
+    global lobby_id, startup_error
 
     # Args: [port] [session_name] [map_name]  — all optional, normally set by spawner
     port_global    = int(sys.argv[1]) if len(sys.argv) > 1 else find_available_port(2100)
@@ -1204,9 +1201,8 @@ def main():
                 start_timeout_timer = None
 
         lobby_id = None
-        lobby_id_event.clear()
-        startup_failure = None
-        startup_failure_event.clear()
+        startup_error = None
+        startup_status_event.clear()
         process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -1224,29 +1220,23 @@ def main():
         reader = threading.Thread(target=output_reader, args=(process,), daemon=True)
         reader.start()
 
-        verification_deadline = time.monotonic() + LOBBY_ID_TIMEOUT
-        while not lobby_id_event.is_set() and not startup_failure_event.is_set():
-            remaining = verification_deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            startup_failure_event.wait(min(remaining, 0.2))
-
-        if startup_failure_event.is_set():
-            verification_failure = startup_failure or "unknown lobby startup error"
-        elif lobby_id_event.is_set():
-            verification_failure = None
-        else:
+        startup_status_event.wait(LOBBY_ID_TIMEOUT)
+        verification_failure = startup_error
+        if verification_failure is None and not lobby_id:
             verification_failure = "no lobby ID received"
 
         if verification_failure is None:
             log("INFO", f"Lobby ID verified after launch: {lobby_id}")
             process.wait()
         else:
-            lobby_id_restarts += 1
+            if verification_failure.startswith("lobbyerror"):
+                failure_description = verification_failure
+            else:
+                failure_description = f"missing lobby ID ({verification_failure})"
+
             log(
                 "WARN",
-                f"Lobby verification failed ({verification_failure}) "
-                f"(restart {lobby_id_restarts}/{MAX_LOBBY_ID_RESTARTS}).",
+                f"Lobby verification failed: {failure_description}",
             )
             if process.poll() is None:
                 try:
@@ -1258,10 +1248,19 @@ def main():
 
             if lobby_id_restarts >= MAX_LOBBY_ID_RESTARTS:
                 lobby_verification_failed = True
-                log("ERROR", "Lobby ID verification failed after 3 restarts; stopping instance.")
+                log(
+                    "ERROR",
+                    f"Lobby verification failed after {MAX_LOBBY_ID_RESTARTS} "
+                    "restarts; stopping instance.",
+                )
                 break
 
-            log("INFO", "Restarting instance to retry lobby ID verification.")
+            lobby_id_restarts += 1
+            log(
+                "INFO",
+                f"Restarting instance to retry lobby verification "
+                f"({lobby_id_restarts}/{MAX_LOBBY_ID_RESTARTS}).",
+            )
             continue
 
         with start_timeout_lock:
