@@ -38,6 +38,8 @@ MIN_PLAYERS     = 3    # Minimum players required to hold a vote
 START_TIMEOUT   = 5400 # seconds: 90 minutes to start a game before auto-restart
 MAPS_DIR        = os.path.join(SCRIPT_DIR, "maps")
 
+instance_start_time = None  # Set in main() to track session uptime
+
 
 # ─── Globals ──────────────────────────────────────────────────────────────────
 
@@ -189,6 +191,76 @@ def spawn_new_instance(base_name: str, map_name: str):
         "python3", os.path.join(SCRIPT_DIR, "instance_bot.py"), base_name, str(port), session_name, map_name
     ]
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+# ─── System Info Helpers ──────────────────────────────────────────────────────
+
+def get_cpu_load() -> str:
+    """Return 1/5/15-min CPU load averages."""
+    try:
+        load1, load5, load15 = os.getloadavg()
+        return f"{load1:.2f} / {load5:.2f} / {load15:.2f}  (1/5/15 min)"
+    except OSError:
+        return "N/A"
+
+
+def get_ram_usage() -> str:
+    """Return RAM used / total from /proc/meminfo."""
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    info[parts[0].rstrip(":")] = int(parts[1])  # kB
+        total_kb = info.get("MemTotal", 0)
+        avail_kb = info.get("MemAvailable", info.get("MemFree", 0))
+        used_kb = total_kb - avail_kb
+        total_mb = total_kb / 1024
+        used_mb = used_kb / 1024
+        pct = (used_kb / total_kb * 100) if total_kb else 0
+        return f"{used_mb:.0f} MB / {total_mb:.0f} MB ({pct:.1f}%)"
+    except Exception:
+        return "N/A"
+
+
+def get_public_ip() -> str:
+    """Return the machine's default outbound IP address."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
+
+def get_session_remaining() -> str:
+    """Return remaining time before the START_TIMEOUT auto-restart."""
+    if instance_start_time is None:
+        return "N/A"
+    with start_timeout_lock:
+        if game_started:
+            return "Game in progress"
+    elapsed = time.time() - instance_start_time
+    remaining = max(0, START_TIMEOUT - elapsed)
+    mins, secs = divmod(int(remaining), 60)
+    return f"{mins}m {secs}s"
+
+
+# ─── Map Admin Persistence ────────────────────────────────────────────────────
+
+def save_authorized_pkeys():
+    """Persist the current authorized_pkeys list back to instances.json."""
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            data = json.load(f)
+        data[instance_name_global]["authorized_pkeys"] = config.get("authorized_pkeys", [])
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        log("ADMIN", "authorized_pkeys saved to instances.json")
+    except Exception as e:
+        log("WARN", f"Failed to save authorized_pkeys: {e}")
+
 
 # ─── Shared Utilities ─────────────────────────────────────────────────────────
 
@@ -731,6 +803,91 @@ def on_chat_cmd(line: str):
         return
 
 
+    # ── /report ────────────────────────────────────────────────────────────────
+    if msg_lower == "/report":
+        ip_addr = get_public_ip()
+        lines = [
+            "=== Server Report ===",
+            f"CPU Load: {get_cpu_load()}",
+            f"RAM Usage: {get_ram_usage()}",
+            f"Address: {ip_addr}:{port_global}",
+            f"Session Time Remaining: {get_session_remaining()}",
+        ]
+        if sender_pk:
+            for l in lines:
+                dm(sender_pk, l)
+        return
+
+    # ── /mapsadmin ─────────────────────────────────────────────────────────────
+    if msg_lower.startswith("/mapsadmin"):
+        auth_pkeys = config.get("authorized_pkeys", [])
+        if sender_pk not in auth_pkeys:
+            if sender_pk:
+                dm(sender_pk, "You are not authorized to manage map admins.")
+            return
+
+        tokens = raw_msg.strip().split()
+        # /mapsadmin list
+        if len(tokens) >= 2 and tokens[1].lower() == "list":
+            if not auth_pkeys:
+                dm(sender_pk, "No map admins configured.")
+            else:
+                dm(sender_pk, "=== Map Admins ===")
+                for i, pk in enumerate(auth_pkeys, 1):
+                    # Try to find a name in the roster for this pkey
+                    entry = get_entry_by_pk(pk)
+                    name = entry["name"] if entry else "(not in lobby)"
+                    dm(sender_pk, f"{i}. {pk}  [{name}]")
+            return
+
+        # /mapsadmin add <slot>
+        if len(tokens) >= 3 and tokens[1].lower() == "add":
+            try:
+                target_slot = int(tokens[2])
+            except ValueError:
+                dm(sender_pk, "Usage: /mapsadmin add <player slot number>")
+                return
+            target_pk = get_pk_by_pos(target_slot)
+            if target_pk is None:
+                dm(sender_pk, f"No player found in slot {target_slot}.")
+                return
+            if target_pk in auth_pkeys:
+                target_entry = get_entry_by_pk(target_pk)
+                target_name = target_entry["name"] if target_entry else "Unknown"
+                dm(sender_pk, f"{target_name} is already a map admin.")
+                return
+            auth_pkeys.append(target_pk)
+            config["authorized_pkeys"] = auth_pkeys
+            save_authorized_pkeys()
+            target_entry = get_entry_by_pk(target_pk)
+            target_name = target_entry["name"] if target_entry else "Unknown"
+            dm(sender_pk, f"Added {target_name} (slot {target_slot}) as map admin.")
+            dm(target_pk, "You have been granted map admin privileges.")
+            return
+
+        # /mapsadmin remove <list number>
+        if len(tokens) >= 3 and tokens[1].lower() == "remove":
+            try:
+                list_num = int(tokens[2])
+            except ValueError:
+                dm(sender_pk, "Usage: /mapsadmin remove <list number>")
+                return
+            if list_num < 1 or list_num > len(auth_pkeys):
+                dm(sender_pk, f"Invalid number. Use /mapsadmin list to see valid numbers (1-{len(auth_pkeys)}).")
+                return
+            removed_pk = auth_pkeys.pop(list_num - 1)
+            config["authorized_pkeys"] = auth_pkeys
+            save_authorized_pkeys()
+            removed_entry = get_entry_by_pk(removed_pk)
+            removed_name = removed_entry["name"] if removed_entry else "(not in lobby)"
+            dm(sender_pk, f"Removed map admin #{list_num}: {removed_pk}  [{removed_name}]")
+            return
+
+        # Unknown subcommand
+        if sender_pk:
+            dm(sender_pk, "Usage: /mapsadmin list | /mapsadmin add <slot> | /mapsadmin remove <number>")
+        return
+
     # ── /votekick <slot> ──────────────────────────────────────────────────────
     if msg_lower.startswith("/votekick"):
         tokens = raw_msg.strip().split()
@@ -937,6 +1094,7 @@ def shutdown(signum=None, frame=None):
 def main():
     global process, config, greetings, log_file_handle, game_started, start_timeout_timer
     global instance_name_global, port_global, session_global, quit_after_game
+    global instance_start_time
 
     if len(sys.argv) < 2:
         print(f"Usage: python3 {os.path.basename(__file__)} <instance_name> [port] [session]")
@@ -964,6 +1122,8 @@ def main():
     log("INFO", f"Session       : {session_global}")
     log("INFO", f"Port          : {port_global}")
     log("INFO", f"Map           : {config.get('map_name')}")
+
+    instance_start_time = time.time()
 
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)
