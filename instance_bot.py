@@ -109,7 +109,7 @@ def extract_map_info(map_name: str) -> dict:
         log("WARN", f"Failed to extract map info: {e}")
         return None
 
-def generate_configs(map_name: str, configdir: str, gameName: str):
+def generate_configs(map_name: str, configdir: str, host_name: str, game_name: str):
     info = extract_map_info(map_name)
     if not info:
         return False
@@ -120,9 +120,9 @@ def generate_configs(map_name: str, configdir: str, gameName: str):
     os.makedirs(configdir, exist_ok=True)
     config_path = os.path.join(configdir, "config")
     with open(config_path, "w") as f:
-        f.write(f"[General]\nmapName={map_name}\nmaxPlayers={players}\ngameName={gameName}\n")
+        f.write(f"[General]\nmapName={map_name}\nmaxPlayers={players}\ngameName={game_name}\n")
         f.write("lobbyserver=https://wzlobby.wz2100.net/lobby\n")
-        f.write("playerName=FreedomHost\n")
+        f.write(f"playerName={host_name}\n")
         f.write("antialiasing=0\n")
         f.write("fog=false\n")
         f.write("hostAutoDesyncKickSeconds=30\n")
@@ -149,7 +149,7 @@ def generate_configs(map_name: str, configdir: str, gameName: str):
             "alliances": 3,
             "powerLevel": 2,
             "bases": 3,
-            "name": gameName,
+            "name": game_name,
             "techLevel": 1,
             "spectatorHost": True,
             "openSpectatorSlots": 10,
@@ -1082,7 +1082,9 @@ def build_command(wz_install: str) -> list:
     global port_global, session_global
     configdir = os.path.join(SCRIPT_DIR, "instance_configs", session_global)
     map_name = config.get("map_name", "NTW-Full2v2")
-    ah_config_name = generate_configs(map_name, configdir, "FreedomHost")
+    host_name = config.get("host_name", "FreedomHost")
+    game_name = config.get("game_name", "FreedomHost")
+    ah_config_name = generate_configs(map_name, configdir, host_name, game_name)
     if not ah_config_name:
         ah_config_name = f"AH_{map_name}"
 

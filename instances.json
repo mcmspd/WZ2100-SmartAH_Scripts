@@ -1,4 +1,6 @@
 {
+  "host_name": "FreedomHost",
+  "game_name": "FreedomHost",
   "greeting_lines": [
     "Welcome to Freedom Host {name}!",
     "- You can initiate a vote kick by: /votekick <Player Slot>",
