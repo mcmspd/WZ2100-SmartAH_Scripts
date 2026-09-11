@@ -123,7 +123,16 @@ def generate_configs(map_name: str, configdir: str, gameName: str):
         f.write(f"[General]\nmapName={map_name}\nmaxPlayers={players}\ngameName={gameName}\n")
         f.write("lobbyserver=https://wzlobby.wz2100.net/lobby\n")
         f.write("playerName=FreedomHost\n")
-        f.write("vsync=0\n")
+        f.write("antialiasing=0\n")
+        f.write("fog=false\n")
+        f.write("hostAutoDesyncKickSeconds=30\n")
+        f.write("hostAutoLagKickSeconds=30\n")
+        f.write("hostAutoNotReadyKickSeconds=30\n")
+        f.write("rotateRadar=false\n")
+        f.write("shadows=0\n")
+        f.write("sound=0\n")
+        f.write("terrainShadows=1\n")
+        f.write("vsync=1\n")
         
     # Generate autohost config
     ah_dir = os.path.join(configdir, "autohost")
