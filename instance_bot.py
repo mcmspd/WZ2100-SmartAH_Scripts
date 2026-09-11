@@ -933,6 +933,7 @@ def on_room_status(line: str):
 
         json_str = line[start:end]
         status = json.loads(json_str)
+        room_data = status.get("data", status)
         players = [
             entry for entry in status.get("players", [])
             if entry.get("type") == "player"
@@ -941,24 +942,42 @@ def on_room_status(line: str):
             entry for entry in status.get("specs", [])
             if entry.get("type") == "spec"
         ]
+        rows = [
+            (
+                str(entry.get("pos", "-")),
+                "PLAYER",
+                str(entry.get("name", "?")),
+                str(entry.get("pk", "-")),
+            )
+            for entry in players
+        ] + [
+            (
+                "-",
+                "SPECTATOR",
+                str(entry.get("name", "?")),
+                str(entry.get("pk", "-")),
+            )
+            for entry in spectators
+        ]
+        headers = ("POS", "TYPE", "NAME", "PUBLIC KEY")
+        widths = [
+            max(len(headers[index]), *(len(row[index]) for row in rows))
+            for index in range(len(headers))
+        ]
         log(
             "STATUS",
-            f"state={status.get('state', '?')} | map={status.get('map', '?')} | "
+            f"state={room_data.get('state', '?')} | map={room_data.get('map', '?')} | "
             f"players={len(players)} | spectators={len(spectators)}",
         )
-        log("STATUS", "POS | TYPE | NAME | PUBLIC KEY")
-        for entry in players:
-            log(
-                "STATUS",
-                f"{entry.get('pos', '-')} | PLAYER | "
-                f"{entry.get('name', '?')} | {entry.get('pk', '-')}",
-            )
-        for entry in spectators:
-            log(
-                "STATUS",
-                f"- | SPECTATOR | "
-                f"{entry.get('name', '?')} | {entry.get('pk', '-')}",
-            )
+        log("STATUS", " | ".join(
+            header.ljust(widths[index])
+            for index, header in enumerate(headers)
+        ))
+        for row in rows:
+            log("STATUS", " | ".join(
+                value.ljust(widths[index])
+                for index, value in enumerate(row)
+            ))
         update_roster_from_status(status)
     except json.JSONDecodeError as e:
         log("WARN", f"Failed to parse room status JSON: {e}")
