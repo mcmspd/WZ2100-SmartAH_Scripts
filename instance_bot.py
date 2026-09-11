@@ -1081,9 +1081,9 @@ def detect_wz_install() -> str:
 def build_command(wz_install: str) -> list:
     global port_global, session_global
     configdir = os.path.join(SCRIPT_DIR, "instance_configs", session_global)
-    map_name = config.get("map_name", "NTW-Full2v2")
-    host_name = config.get("host_name", "FreedomHost")
-    game_name = config.get("game_name", "FreedomHost")
+    map_name = config.get("map_name")
+    host_name = config.get("host_name")
+    game_name = config.get("game_name")
     ah_config_name = generate_configs(map_name, configdir, host_name, game_name)
     if not ah_config_name:
         ah_config_name = f"AH_{map_name}"
