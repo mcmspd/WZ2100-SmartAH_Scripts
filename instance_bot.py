@@ -35,7 +35,9 @@ VOTE_YES        = {"y", "yes"}
 VOTE_NO         = {"n", "no"}
 MIN_PLAYERS     = 3    # Minimum players required to hold a vote
 START_TIMEOUT   = 5400 # seconds: 90 minutes to start a game before auto-restart
-MAPS_DIR        = os.path.join(SCRIPT_DIR, "maps")
+LOBBY_ID_TIMEOUT = 30  # seconds to wait for the lobby ID after launch
+MAX_LOBBY_ID_RESTARTS = 3
+MAPS_DIR         = os.path.join(SCRIPT_DIR, "maps")
 
 instance_start_time = None  # Set in main() to track session uptime
 
@@ -49,6 +51,8 @@ log_file_handle = None # Global file handle for appending logs
 port_global = 0
 session_global = ""
 quit_after_game = False
+lobby_id = None
+lobby_id_event = threading.Event()
 
 
 # Roster: pk (str) -> {"type": str, "name": str, "pos": int|None, "is_spec": bool}
@@ -963,7 +967,13 @@ def process_line(line: str):
     elif line.startswith("WZEVENT: notready-kick:"):
         log("EVENT", "Not-ready kick: " + line[len("WZEVENT: "):])
     elif line.startswith("WZEVENT: lobbyid:"):
-        log("EVENT", "Lobby ID: " + line.split()[-1])
+        global lobby_id
+        lobby_id = line.split(":", 2)[-1].strip()
+        if lobby_id:
+            log("EVENT", "Lobby ID: " + lobby_id)
+            lobby_id_event.set()
+        else:
+            log("WARN", "Received an empty lobby ID.")
     elif line.startswith("WZEVENT:"):
         log("EVENT", line[len("WZEVENT: "):])
     elif line.startswith("WZCMD: stdinReadReady"):
@@ -1135,6 +1145,7 @@ def main():
     global process, config, greetings, log_file_handle, game_started, start_timeout_timer
     global port_global, session_global, quit_after_game
     global instance_start_time
+    global lobby_id
 
     # Args: [port] [session_name] [map_name]  — all optional, normally set by spawner
     port_global    = int(sys.argv[1]) if len(sys.argv) > 1 else find_available_port(2100)
@@ -1172,42 +1183,79 @@ def main():
     in_reader = threading.Thread(target=stdin_reader, daemon=True)
     in_reader.start()
 
-    with roster_lock:
-        roster.clear()
+    lobby_id_restarts = 0
+    lobby_verification_failed = False
+
+    while True:
+        with roster_lock:
+            roster.clear()
+
+        with start_timeout_lock:
+            game_started = False
+            if start_timeout_timer is not None:
+                start_timeout_timer.cancel()
+                start_timeout_timer = None
+
+        lobby_id = None
+        lobby_id_event.clear()
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+        )
+        log("INFO", f"Process started (PID {process.pid})")
+
+        with start_timeout_lock:
+            start_timeout_timer = threading.Timer(START_TIMEOUT, _start_timeout_expired)
+            start_timeout_timer.daemon = True
+            start_timeout_timer.start()
+
+        reader = threading.Thread(target=output_reader, args=(process,), daemon=True)
+        reader.start()
+
+        lobby_id_event.wait(LOBBY_ID_TIMEOUT)
+        if lobby_id_event.is_set():
+            log("INFO", f"Lobby ID verified after launch: {lobby_id}")
+            process.wait()
+        else:
+            lobby_id_restarts += 1
+            log(
+                "WARN",
+                f"No lobby ID received within {LOBBY_ID_TIMEOUT} seconds "
+                f"(restart {lobby_id_restarts}/{MAX_LOBBY_ID_RESTARTS}).",
+            )
+            if process.poll() is None:
+                try:
+                    send_cmd("shutdown now")
+                    process.wait(timeout=5)
+                except Exception:
+                    process.kill()
+                    process.wait()
+
+            if lobby_id_restarts >= MAX_LOBBY_ID_RESTARTS:
+                lobby_verification_failed = True
+                log("ERROR", "Lobby ID verification failed after 3 restarts; stopping instance.")
+                break
+
+            log("INFO", "Restarting instance to retry lobby ID verification.")
+            continue
+
+        with start_timeout_lock:
+            if start_timeout_timer is not None:
+                start_timeout_timer.cancel()
+                start_timeout_timer = None
+
+        log("INFO", f"Process exited (code {process.returncode}).")
+        break
 
     with start_timeout_lock:
-        game_started = False
         if start_timeout_timer is not None:
             start_timeout_timer.cancel()
             start_timeout_timer = None
 
-    process = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=0,
-    )
-    log("INFO", f"Process started (PID {process.pid})")
-
-    with start_timeout_lock:
-        start_timeout_timer = threading.Timer(START_TIMEOUT, _start_timeout_expired)
-        start_timeout_timer.daemon = True
-        start_timeout_timer.start()
-
-    reader = threading.Thread(target=output_reader, args=(process,), daemon=True)
-    reader.start()
-
-    process.wait()
-
-    with start_timeout_lock:
-        if start_timeout_timer is not None:
-            start_timeout_timer.cancel()
-            start_timeout_timer = None
-
-    log("INFO", f"Process exited (code {process.returncode}).")
-
-    if not quit_after_game:
+    if not quit_after_game and not lobby_verification_failed:
         log("INFO", "Process crashed unexpectedly. Spawning new instance.")
         spawn_new_instance(config.get("map_name", ""))
 
