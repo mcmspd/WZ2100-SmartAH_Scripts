@@ -54,6 +54,8 @@ quit_after_game = False
 lobby_id = None
 startup_status_event = threading.Event()
 startup_error = None
+last_chat_log = None
+last_chat_log_time = 0.0
 
 
 # Roster: pk (str) -> {"type": str, "name": str, "pos": int|None, "is_spec": bool}
@@ -742,7 +744,7 @@ def on_chat_cmd(line: str):
         log("CHATCMD", content)
         return
 
-    log("CHATCMD", f"[{sender_name}]: {raw_msg}")
+    log_chat_message(sender_name, raw_msg)
 
     msg_lower = raw_msg.strip().lower()
 
@@ -919,6 +921,18 @@ def on_chat_cmd(line: str):
                 dm(sender_pk, "Unknown vote option. Usage: /vote <y/n>")
 
 
+def log_chat_message(sender_name: str, message: str):
+    """Log a chat message once when both WZ chat events report it."""
+    global last_chat_log, last_chat_log_time
+    now = time.monotonic()
+    message_key = (sender_name, message)
+    if message_key == last_chat_log and now - last_chat_log_time < 1.0:
+        return
+    last_chat_log = message_key
+    last_chat_log_time = now
+    log("CHATCMD", f"[{sender_name}]: {message}")
+
+
 def on_chat_message(line: str):
     """Decode and log a regular WZCHAT message without echoing raw protocol data."""
     content = line[len("WZCHAT: "):].strip()
@@ -934,7 +948,7 @@ def on_chat_message(line: str):
         log("CHATCMD", content)
         return
 
-    log("CHATCMD", f"[{sender_name}]: {message}")
+    log_chat_message(sender_name, message)
 
 
 def on_room_status(line: str):
