@@ -919,6 +919,24 @@ def on_chat_cmd(line: str):
                 dm(sender_pk, "Unknown vote option. Usage: /vote <y/n>")
 
 
+def on_chat_message(line: str):
+    """Decode and log a regular WZCHAT message without echoing raw protocol data."""
+    content = line[len("WZCHAT: "):].strip()
+    parts = content.split()
+    if len(parts) < 4:
+        log("CHATCMD", content)
+        return
+
+    try:
+        sender_name = base64.b64decode(parts[2]).decode("utf-8", errors="replace").strip()
+        message = base64.b64decode(parts[3]).decode("utf-8", errors="replace").strip()
+    except Exception:
+        log("CHATCMD", content)
+        return
+
+    log("CHATCMD", f"[{sender_name}]: {message}")
+
+
 def on_room_status(line: str):
     """
     Handle: __WZROOMSTATUS__{...}__ENDWZROOMSTATUS__
@@ -1027,6 +1045,8 @@ def process_line(line: str):
         log("WZCMD", line[len("WZCMD: "):])
     elif line.startswith("WZCHATLOB:"):
         on_chat_cmd(line)
+    elif line.startswith("WZCHAT:"):
+        on_chat_message(line)
     elif "__WZROOMSTATUS__" in line and "__ENDWZROOMSTATUS__" in line:
         on_room_status(line)
     else:
