@@ -885,7 +885,7 @@ def build_command() -> list:
     global port_global, session_global
     configdir = os.path.join(SCRIPT_DIR, "instance_configs", session_global)
     map_name = config.get("map_name", "NTW-Full2v2")
-    ah_config_name = generate_configs(map_name, configdir, "No Rambo means No Bans")
+    ah_config_name = generate_configs(map_name, configdir, "FreedomHost")
     if not ah_config_name:
         ah_config_name = f"AH_{map_name}"
 
