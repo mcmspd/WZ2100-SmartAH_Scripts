@@ -224,13 +224,16 @@ def get_ram_usage() -> str:
 
 
 def get_public_ip() -> str:
-    """Return the machine's default outbound IP address."""
+    """Return the machine's public IP address via curl ifconfig.me."""
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
+        result = subprocess.run(
+            ["curl", "-s", "--max-time", "5", "ifconfig.me"],
+            capture_output=True, text=True
+        )
+        ip = result.stdout.strip()
+        return ip if ip else "N/A"
     except Exception:
-        return "127.0.0.1"
+        return "N/A"
 
 
 def get_session_remaining() -> str:
