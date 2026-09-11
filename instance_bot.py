@@ -961,12 +961,12 @@ def on_room_status(line: str):
         ]
         headers = ("POS", "TYPE", "NAME", "PUBLIC KEY")
         widths = [
-            max(len(headers[index]), *(len(row[index]) for row in rows))
+            max([len(headers[index])] + [len(row[index]) for row in rows])
             for index in range(len(headers))
         ]
         log(
             "STATUS",
-            f"state={room_data.get('state', '?')} | map={room_data.get('map', '?')} | "
+            f"map={room_data.get('map', '?')} | "
             f"players={len(players)} | spectators={len(spectators)}",
         )
         log("STATUS", " | ".join(
