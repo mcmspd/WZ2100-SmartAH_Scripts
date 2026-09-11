@@ -373,14 +373,15 @@ def get_pos_by_pk(pk: str) -> int | None:
 
 # ─── Game Process Communication ───────────────────────────────────────────────
 
-def send_cmd(cmd: str):
+def send_cmd(cmd: str, log_command: bool = True):
     """Write a single command line to the game's stdin."""
     if process and process.stdin:
         try:
             # Encode to bytes for binary stdin pipe
             process.stdin.write((cmd.rstrip("\n") + "\n").encode("utf-8", errors="replace"))
             process.stdin.flush()
-            log("CMD->", cmd.strip())
+            if log_command:
+                log("CMD->", cmd.strip())
         except BrokenPipeError:
             log("WARN", "stdin pipe broken; process may have exited.")
 
@@ -692,7 +693,9 @@ def on_player_join(line: str):
 
     for line_template in greetings:
         msg = line_template.format(name=player_name)
-        send_cmd(f"chat direct {player_hash} {msg}")
+        send_cmd(f"chat direct {player_hash} {msg}", log_command=False)
+    if greetings:
+        log("DM", f"Welcome message sent to {player_name}")
 
 
 def on_player_left(line: str):
