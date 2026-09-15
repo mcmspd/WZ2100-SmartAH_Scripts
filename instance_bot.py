@@ -21,6 +21,7 @@ import threading
 import time
 from datetime import datetime
 import glob
+import re
 import shutil
 import socket
 import zipfile
@@ -389,17 +390,50 @@ def get_pos_by_pk(pk: str) -> int | None:
 
 # ─── Game Process Communication ───────────────────────────────────────────────
 
-def send_cmd(cmd: str, log_command: bool = True):
-    """Write a single command line to the game's stdin."""
+WZ_COMMAND_PATTERNS = (
+    re.compile(r"exit"),
+    re.compile(r"admin (?:add-hash|add-public-key|remove) \S+"),
+    re.compile(r"kick identity \S+(?: .+)?"),
+    re.compile(r"redirect identity \S+ \S+"),
+    re.compile(r"permissions set connect:(?:allow|block) \S+"),
+    re.compile(r"permissions unset connect \S+"),
+    re.compile(r"set chat (?:allow|quickchat|mute) \S+"),
+    re.compile(r"ban ip \S+(?: .+)?"),
+    re.compile(r"unban ip \S+"),
+    re.compile(r"chat bcast .+"),
+    re.compile(r"chat direct \S+ .+"),
+    re.compile(r"join (?:approve|reject|approvespec) \S+(?: \d+)?(?: .+)?"),
+    re.compile(r"status"),
+    re.compile(r"set host ready [01]"),
+    re.compile(r"shutdown now"),
+)
+
+
+def is_valid_wz_command(cmd: str) -> bool:
+    """Return whether cmd matches a command supported by Warzone's stdin CLI."""
+    if not cmd or cmd != cmd.strip() or any(ord(char) < 0x20 or ord(char) == 0x7F for char in cmd):
+        return False
+    return any(pattern.fullmatch(cmd) for pattern in WZ_COMMAND_PATTERNS)
+
+
+def send_cmd(cmd: str, log_command: bool = True) -> bool:
+    """Write one validated Warzone stdin command line to the game's stdin."""
+    command = cmd.rstrip("\r\n")
+    if not is_valid_wz_command(command):
+        log("WARN", f"Rejected unsupported Warzone CLI command: {cmd!r}")
+        return False
+
     if process and process.stdin:
         try:
             # Encode to bytes for binary stdin pipe
-            process.stdin.write((cmd.rstrip("\n") + "\n").encode("utf-8", errors="replace"))
+            process.stdin.write((command + "\n").encode("utf-8", errors="replace"))
             process.stdin.flush()
             if log_command:
-                log("CMD->", cmd.strip())
+                log("CMD->", command)
+            return True
         except BrokenPipeError:
             log("WARN", "stdin pipe broken; process may have exited.")
+    return False
 
 
 def bcast(msg: str):
@@ -769,7 +803,7 @@ def on_chat_cmd(line: str):
 
     
     # ── Update roster first before any action ─────────────────────────────────
-    send_cmd("roomstatus")
+    send_cmd("status")
 
     # ── /maps ─────────────────────────────────────────────────────────────────
     if msg_lower == "/maps":
