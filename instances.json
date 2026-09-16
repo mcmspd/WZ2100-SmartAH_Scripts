@@ -1,12 +1,13 @@
 {
   "host_name": "FreeHost",
-  "game_name": "Server Testing",
+  "host_key": "OW01+SbGmxo7qEJEvkbh3AQAAAD7RyEAAAAAAAAAAAAUfb6F/5nhTep8ZVHxSfHjyTAikVHxoQhVeBJoEZsn2Q==",
+  "game_name": "FreeHost",
   "host_auto_desync_kick_seconds": 60,
   "host_auto_lag_kick_seconds": 60,
   "host_auto_not_ready_kick_seconds": 30,
   "game_password": "",
   "greeting_lines": [
-    "Welcome to Freedom Host {name}!",
+    "Welcome to Free Host {name}!",
     "- You can initiate a vote kick by: /votekick <Player Slot>",
     "- Vote by /vote y or /vote n",
     "- Player will be kicked if 100% of the votes count to YES.",

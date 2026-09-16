@@ -126,6 +126,7 @@ def generate_configs(
     lag_kick_seconds: int = 30,
     not_ready_kick_seconds: int = 30,
     game_password: str = "",
+    host_key: str = "",
 ):
     info = extract_map_info(map_name)
     if not info:
@@ -189,9 +190,13 @@ def generate_configs(
     with open(ah_path, "w") as f:
         json.dump(ah_data, f, indent=2)
         
-    # Generate empty players dir
+    # Generate players dir and host sta2 identity if provided
     players_dir = os.path.join(configdir, "multiplay", "players")
     os.makedirs(players_dir, exist_ok=True)
+    if host_key and host_name:
+        sta2_path = os.path.join(players_dir, f"{host_name}.sta2")
+        with open(sta2_path, "w", encoding="utf-8") as f:
+            f.write(f"WZ.STA.v3\n0 0 0 0 0\n{host_key.strip()}\n")
         
     # Copy map file into config maps directory
     target_maps_dir = os.path.join(configdir, "maps")
@@ -1231,6 +1236,7 @@ def build_command(wz_install: str) -> list:
     map_name = config.get("map_name")
     host_name = config.get("host_name")
     game_name = config.get("game_name")
+    host_key = config.get("host_key") or config.get("host_sta2_key") or config.get("sta2_key") or ""
     ah_config_name = generate_configs(
         map_name,
         configdir,
@@ -1240,6 +1246,7 @@ def build_command(wz_install: str) -> list:
         config.get("host_auto_lag_kick_seconds", 30),
         config.get("host_auto_not_ready_kick_seconds", 30),
         config.get("game_password", ""),
+        host_key,
     )
     if not ah_config_name:
         ah_config_name = f"AH_{map_name}"
