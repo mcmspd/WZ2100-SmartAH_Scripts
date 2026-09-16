@@ -1249,7 +1249,7 @@ def build_command(wz_install: str) -> list:
 
     common_args = [
         "--headless",
-        "--debug=LOG_ALL",
+        "--debug=ALL",
         "--nosound",
         f"--configdir={configdir}",
         f"--autohost={ah_config_name}",
