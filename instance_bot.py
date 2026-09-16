@@ -1256,7 +1256,14 @@ def build_command(wz_install: str) -> list:
 
     common_args = [
         "--headless",
-        "--debug=ALL",
+        "--debug=WZ",
+        "--debug=NET",
+        "--debug=SCRIPT",
+        "--debug=MOVEMENT",
+        "--debug=ATTACK",
+        "--debug=SYNC",
+        "--debug=RESEARCH",
+        "--debug=LOBBY",
         "--nosound",
         f"--configdir={configdir}",
         f"--autohost={ah_config_name}",
