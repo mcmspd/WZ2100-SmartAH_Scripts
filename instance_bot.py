@@ -82,11 +82,86 @@ game_started = False
 start_timeout_timer = None
 start_timeout_lock = threading.Lock()
 
+map_change_in_progress = False
+map_change_lock = threading.Lock()
+
+STATUS_DIR = os.path.join(SCRIPT_DIR, "instance_configs")
+
+def write_session_status(session_name: str, status: str, port: int, lobby_id: str = None, error: str = None):
+    """Write instance lifecycle state to a status file."""
+    if not session_name:
+        return
+    os.makedirs(STATUS_DIR, exist_ok=True)
+    status_file = os.path.join(STATUS_DIR, f"{session_name}.status.json")
+    data = {
+        "session": session_name,
+        "status": status,
+        "port": port,
+        "lobby_id": lobby_id,
+        "error": error,
+        "timestamp": time.time(),
+    }
+    tmp_file = status_file + ".tmp"
+    try:
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp_file, status_file)
+    except Exception as e:
+        log("WARN", f"Failed to write session status: {e}")
+
+def read_session_status(session_name: str) -> dict | None:
+    """Read instance lifecycle state from its status file."""
+    if not session_name:
+        return None
+    status_file = os.path.join(STATUS_DIR, f"{session_name}.status.json")
+    if not os.path.exists(status_file):
+        return None
+    try:
+        with open(status_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def clear_session_status(session_name: str):
+    """Clear instance lifecycle state file."""
+    if not session_name:
+        return
+    status_file = os.path.join(STATUS_DIR, f"{session_name}.status.json")
+    try:
+        if os.path.exists(status_file):
+            os.remove(status_file)
+    except Exception:
+        pass
+
+def wait_for_new_instance_ready(session_name: str, timeout: float = 60.0) -> dict | None:
+    """
+    Wait until the new instance reports that it has verified its lobby ID.
+    Returns status dict with 'lobby_id' and 'port' if confirmed, or None on failure/timeout.
+    """
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        status = read_session_status(session_name)
+        if status:
+            if status.get("status") == "ready" and status.get("lobby_id"):
+                return status
+            if status.get("status") == "failed":
+                log("WARN", f"New instance {session_name} failed: {status.get('error')}")
+                return None
+            if status.get("status") == "exited":
+                log("WARN", f"New instance {session_name} exited unexpectedly.")
+                return None
+        time.sleep(0.5)
+    log("WARN", f"Timed out waiting for {session_name} to verify lobby ID.")
+    return None
+
 # ─── Dynamic Config & Instances ───────────────────────────────────────────────
 
-def find_available_port(start_port: int) -> int:
+def find_available_port(start_port: int, exclude_port: int = None) -> int:
     port = start_port
     while port <= 2110:
+        if exclude_port is not None and port == exclude_port:
+            port += 1
+            continue
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             if s.connect_ex(('localhost', port)) != 0:
                 return port
@@ -208,18 +283,48 @@ def generate_configs(
         
     return ah_name
 
-def spawn_new_instance(map_name: str):
-    """Launch a fresh bot instance in a new tmux session."""
-    log("INFO", f"Spawning new instance with map {map_name}")
-    port = find_available_port(2100)
+def spawn_new_instance(map_name: str) -> tuple[int, str]:
+    """Launch a fresh bot instance in a new tmux session. Returns (port, session_name)."""
+    global port_global
+    port = find_available_port(2100, exclude_port=port_global)
     session_name = f"WZ_{port}"
-    # Run tmux new-session via subprocess
+    log("INFO", f"Spawning new instance {session_name} on port {port} with map {map_name}")
+    clear_session_status(session_name)
+    subprocess.run(["tmux", "kill-session", "-t", session_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     cmd = [
         "tmux", "new-session", "-d", "-s", session_name,
         "python3", os.path.join(SCRIPT_DIR, "instance_bot.py"),
         str(port), session_name, map_name
     ]
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return port, session_name
+
+
+def redirect_all_players(new_port: int) -> int:
+    """Redirect all connected human players and spectators to the new instance."""
+    with roster_lock:
+        roster_snapshot = list(roster.items())
+
+    host_name = config.get("host_name", "")
+    game_pw = config.get("game_password", "")
+    count = 0
+    for pk, entry in roster_snapshot:
+        if not pk or pk == "-":
+            continue
+        if (host_name and entry.get("name") == host_name) or (entry.get("is_spec") and entry.get("ip") in (None, "-", "")):
+            continue
+        is_spec = 1 if entry.get("is_spec", False) else 0
+        if game_pw:
+            conn_str = f"tcp:{new_port}:{is_spec}:{game_pw}"
+        else:
+            conn_str = f"tcp:{new_port}:{is_spec}"
+
+        player_name = entry.get("name", "Unknown")
+        log("REDIRECT", f"Redirecting {player_name} ({pk}) to {conn_str}")
+        send_cmd(f"redirect identity {pk} {conn_str}")
+        count += 1
+    log("REDIRECT", f"Redirect command issued for {count} connection(s).")
+    return count
 
 # ─── System Info Helpers ──────────────────────────────────────────────────────
 
@@ -337,6 +442,7 @@ def update_roster_from_status(status_json: dict):
             "name": p.get("name", "Unknown"),
             "pos": pos,
             "is_spec": False,
+            "ip": p.get("ip"),
         }
 
     # Process spectators
@@ -351,6 +457,7 @@ def update_roster_from_status(status_json: dict):
             "name": s.get("name", "Unknown"),
             "pos": None,
             "is_spec": True,
+            "ip": s.get("ip"),
         }
 
     with roster_lock:
@@ -399,7 +506,7 @@ WZ_COMMAND_PATTERNS = (
     re.compile(r"exit"),
     re.compile(r"admin (?:add-hash|add-public-key|remove) \S+"),
     re.compile(r"kick identity \S+(?: .+)?"),
-    re.compile(r"redirect identity \S+ \S+"),
+    re.compile(r"redirect identity \S+ \S+(?: .+)?"),
     re.compile(r"permissions set connect:(?:allow|block) \S+"),
     re.compile(r"permissions unset connect \S+"),
     re.compile(r"set chat (?:allow|quickchat|mute) \S+"),
@@ -459,21 +566,36 @@ def _start_timeout_expired():
             return
         if process is None or process.poll() is not None:
             return
-    log("TIMEOUT", "90-minute start window expired. Spawning new instance and shutting down.")
-    spawn_new_instance(config.get("map_name", ""))
-    time.sleep(30)
-    with roster_lock:
-        roster_snapshot = list(roster.items())
-    for pk, entry in roster_snapshot:
-        if entry["type"] == "player":
-            send_cmd(f"kick identity {pk} Lobby stale, moving you to a fresh lobby.")
-    time.sleep(5)
-    quit_after_game = True
-    if process:
-        try:
-            send_cmd("shutdown now")
-        except Exception:
-            process.kill()
+    log("TIMEOUT", "90-minute start window expired. Spawning new instance to migrate players...")
+    bcast("Lobby timeout expired. Launching fresh lobby...")
+    new_port, new_session = spawn_new_instance(config.get("map_name", ""))
+    status = wait_for_new_instance_ready(new_session, timeout=60.0)
+    with start_timeout_lock:
+        if game_started or process is None or process.poll() is not None:
+            log("TIMEOUT", "Game started or process ended while waiting for fresh instance. Cancelling timeout migration.")
+            return
+    if status and status.get("lobby_id"):
+        new_lobby_id = status["lobby_id"]
+        log("MIGRATE", f"Fresh instance {new_session} ready with lobby ID {new_lobby_id}. Redirecting players to port {new_port}...")
+        send_cmd("status")
+        time.sleep(0.5)
+        bcast(f"Fresh lobby is ready. Redirecting everyone to port {new_port}...")
+        redirect_all_players(new_port)
+        time.sleep(2)
+        quit_after_game = True
+        if process:
+            try:
+                send_cmd("shutdown now")
+            except Exception:
+                process.kill()
+    else:
+        log("WARN", f"Fresh instance {new_session} failed lobby verification. Aborting timeout redirect.")
+        bcast("Warning: fresh lobby failed to start. Keeping current lobby open.")
+        with start_timeout_lock:
+            if not game_started and process and process.poll() is None:
+                start_timeout_timer = threading.Timer(600, _start_timeout_expired)
+                start_timeout_timer.daemon = True
+                start_timeout_timer.start()
 
 def _vote_timed_out():
     """Called when the 60-second voting window expires."""
@@ -831,33 +953,66 @@ def on_chat_cmd(line: str):
             if sender_pk:
                 dm(sender_pk, "You are not authorized to change the map.")
             return
-            
+
+        with map_change_lock:
+            global map_change_in_progress
+            if map_change_in_progress:
+                if sender_pk:
+                    dm(sender_pk, "A map change is already in progress.")
+                return
+            map_change_in_progress = True
+
         maps = get_available_maps()
         try:
             map_index = int(raw_arg) - 1
             if map_index < 0 or map_index >= len(maps):
                 if sender_pk:
                     dm(sender_pk, f"Invalid map index. Use 1 to {len(maps)}.")
+                with map_change_lock:
+                    map_change_in_progress = False
                 return
             new_map = maps[map_index]
         except ValueError:
             if sender_pk:
                 dm(sender_pk, "Please provide a valid map index. Usage: /maps <index>")
+            with map_change_lock:
+                map_change_in_progress = False
             return
-            
-        bcast(f"Map change to {new_map} requested by {sender_name}. Restarting lobby in 30 seconds...")
-        spawn_new_instance(new_map)
-        time.sleep(30)
-        # Kick everyone
-        with roster_lock:
-            for pk, entry in roster.items():
-                if entry["type"] == "player":
-                    send_cmd(f"kick identity {pk} Map changing to {new_map}, please rejoin!")
-        time.sleep(3)
-        
-        global quit_after_game
-        quit_after_game = True
-        send_cmd("shutdown now")
+
+        bcast(f"Map change to {new_map} requested by {sender_name}. Launching new lobby...")
+
+        def _handle_map_change(map_to_load: str):
+            global quit_after_game, map_change_in_progress
+            try:
+                new_port, new_session = spawn_new_instance(map_to_load)
+                status = wait_for_new_instance_ready(new_session, timeout=60.0)
+                with start_timeout_lock:
+                    if game_started or process is None or process.poll() is not None:
+                        log("MIGRATE", "Game started or process ended while waiting for new map instance. Cancelling map change.")
+                        with map_change_lock:
+                            map_change_in_progress = False
+                        return
+                if status and status.get("lobby_id"):
+                    new_lobby_id = status["lobby_id"]
+                    log("MIGRATE", f"New instance {new_session} ready with lobby ID {new_lobby_id}. Redirecting players to port {new_port}...")
+                    send_cmd("status")
+                    time.sleep(0.5)
+                    bcast(f"New lobby is ready. Redirecting everyone to {map_to_load} on port {new_port}...")
+                    redirect_all_players(new_port)
+                    time.sleep(2)
+                    quit_after_game = True
+                    send_cmd("shutdown now")
+                else:
+                    log("WARN", f"New instance {new_session} failed lobby verification. Aborting map change redirect.")
+                    bcast(f"Map change failed: new lobby could not be verified. Remaining on {config.get('map_name')}.")
+                    with map_change_lock:
+                        map_change_in_progress = False
+            except Exception as e:
+                log("WARN", f"Error during map change migration: {e}")
+                with map_change_lock:
+                    map_change_in_progress = False
+
+        threading.Thread(target=_handle_map_change, args=(new_map,), daemon=True).start()
         return
 
 
@@ -1282,6 +1437,7 @@ def build_command(wz_install: str) -> list:
 def shutdown(signum=None, frame=None):
     global start_timeout_timer
     log("INFO", "Shutting down...")
+    write_session_status(session_global, "exited", port_global)
 
     with start_timeout_lock:
         if start_timeout_timer is not None:
@@ -1311,6 +1467,8 @@ def main():
     # Args: [port] [session_name] [map_name]  — all optional, normally set by spawner
     port_global    = int(sys.argv[1]) if len(sys.argv) > 1 else find_available_port(2100)
     session_global = sys.argv[2]      if len(sys.argv) > 2 else f"WZ_{port_global}"
+
+    write_session_status(session_global, "starting", port_global)
 
     config = load_config()
 
@@ -1384,6 +1542,7 @@ def main():
 
         if verification_failure is None:
             log("INFO", f"Lobby ID verified after launch: {lobby_id}")
+            write_session_status(session_global, "ready", port_global, lobby_id=lobby_id)
             process.wait()
         else:
             if verification_failure.startswith("lobbyerror"):
@@ -1391,6 +1550,7 @@ def main():
             else:
                 failure_description = f"missing lobby ID ({verification_failure})"
 
+            write_session_status(session_global, "failed", port_global, error=failure_description)
             log(
                 "WARN",
                 f"Lobby verification failed: {failure_description}",
@@ -1437,6 +1597,7 @@ def main():
         log("INFO", "Process crashed unexpectedly. Spawning new instance.")
         spawn_new_instance(config.get("map_name", ""))
 
+    write_session_status(session_global, "exited", port_global)
     log_file_handle.close()
     sys.exit(0)
 
