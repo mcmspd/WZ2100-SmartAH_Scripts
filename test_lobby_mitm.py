@@ -122,6 +122,14 @@ class DeleteTests(unittest.TestCase):
 class LoopbackProxyTests(unittest.TestCase):
     """Real TLS through the proxy: forged cert accepted, token captured."""
 
+    @staticmethod
+    def _free_port() -> int:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
     def _mkcert(self, d, cn):
         key = os.path.join(d, f"{cn}.key")
         crt = os.path.join(d, f"{cn}.crt")
@@ -179,7 +187,7 @@ class LoopbackProxyTests(unittest.TestCase):
             threading.Thread(target=upstream, daemon=True).start()
 
             # Proxy under test (trust the fake upstream's self-signed cert).
-            proxy_port = 18080
+            proxy_port = self._free_port()
             threading.Thread(target=mitm.serve,
                              args=(proxy_port, ["upstream.test"], ca_dir, certs_dir, store,
                                    os.path.join(tmp, "upstream.test.crt")),
