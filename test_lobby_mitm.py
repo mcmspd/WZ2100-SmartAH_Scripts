@@ -127,6 +127,20 @@ def _free_port() -> int:
     return port
 
 
+def _wait_port(port: int, timeout: float = 10.0):
+    """Block until something listens on 127.0.0.1:port (no fixed sleeps)."""
+    import time as _time
+    deadline = _time.time() + timeout
+    while True:
+        try:
+            c = socket.create_connection(("127.0.0.1", port), timeout=1)
+            c.close()
+            return
+        except OSError:
+            if _time.time() >= deadline:
+                raise
+            _time.sleep(0.05)
+
 def _mkcert(d, cn):
     key = os.path.join(d, f"{cn}.key")
     crt = os.path.join(d, f"{cn}.crt")
@@ -193,7 +207,7 @@ class LoopbackProxyTests(unittest.TestCase):
                              args=(proxy_port, ["upstream.test"], ca_dir, certs_dir, store,
                                    os.path.join(tmp, "upstream.test.crt")),
                              daemon=True).start()
-            time.sleep(0.5)
+            _wait_port(proxy_port)
             mitm_ca = os.path.join(ca_dir, "ca.crt")
             self.assertTrue(os.path.exists(mitm_ca), "proxy must generate its CA")
 
@@ -314,7 +328,15 @@ class GameRelayTests(unittest.TestCase):
         threading.Thread(target=accept_one, daemon=True).start()
         c = socket.create_connection(("127.0.0.1", relay_port), timeout=5)
         c.sendall(b"ping-relay")
-        self.assertEqual(c.recv(4096), b"ping-relay")
+        c.settimeout(10)
+        got = b""
+        deadline = time.time() + 10
+        while len(got) < len(b"ping-relay") and time.time() < deadline:
+            chunk = c.recv(4096)
+            if not chunk:
+                break
+            got += chunk
+        self.assertEqual(got, b"ping-relay")
         c.close()
         echo.close()
         relay.close()
@@ -418,7 +440,7 @@ class ForgeTests(unittest.TestCase):
                             ca_dir=ca_dir, certs_dir=certs_dir, store_path=store,
                             upstream_cafile=os.path.join(tmp, "forge.test.crt"),
                             forge_join_checks=True)).start()
-            time.sleep(0.5)
+            _wait_port(proxy_port)
             real_get_dst = mitm.get_original_dst
             mitm.get_original_dst = lambda conn: ("127.0.0.1", up_port)
             try:
