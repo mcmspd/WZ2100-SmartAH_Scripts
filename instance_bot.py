@@ -1116,12 +1116,14 @@ def _post_game_handover(successor_session: str, live: tuple[int, str]):
                     arm_start_timeout()
 
 
-def maybe_spawn_crash_replacement() -> None:
-    """Crash-path replacement that never double-lists (called from main).
+def maybe_spawn_crash_replacement(reason: str = "crashed") -> None:
+    """Replacement spawn that never double-lists (called from main).
 
-    Frees our own slot first, then spawns only when no other family listing
-    is public. A dead instance must never POST a second listing next to a
-    live lobby.
+    `reason` is "crashed" for unexpected deaths or "game-ended" when stock
+    quits cleanly after a game (exit 0 while a game was running). Either way
+    a replacement is only spawned when no live lobby covers us; the label
+    just keeps the logs honest. Frees our own slot first, then spawns only
+    when no other family listing is public.
     """
     uptime = time.time() - (instance_start_time or time.time())
     min_uptime = float(config.get("min_uptime_to_respawn_seconds", MIN_UPTIME_TO_RESPAWN))
@@ -1142,9 +1144,12 @@ def maybe_spawn_crash_replacement() -> None:
         log("WARN", f"Public list check failed ({e}); spawning replacement anyway.")
         others = []
     if others:
-        log("WARN", f"Lobby already covered by {others}; not spawning crash replacement.")
+        log("WARN", f"Lobby already covered by {others}; not spawning replacement.")
         return
-    log("INFO", "Process crashed unexpectedly. Spawning new instance.")
+    if reason == "game-ended":
+        log("INFO", "Game ended (process exited). Spawning replacement lobby.")
+    else:
+        log("INFO", "Process crashed unexpectedly. Spawning new instance.")
     spawn_new_instance(current_map_name or config.get("map_name", ""),
                        list(current_map_mods))
 
@@ -2533,7 +2538,10 @@ def main():
             start_timeout_timer = None
 
     if not quit_after_game and not lobby_verification_failed and crash_respawn_allowed():
-        maybe_spawn_crash_replacement()
+        if game_started and process is not None and process.returncode == 0:
+            maybe_spawn_crash_replacement(reason="game-ended")
+        else:
+            maybe_spawn_crash_replacement()
 
     write_session_status(session_global, "exited", port_global)
     log_file_handle.close()

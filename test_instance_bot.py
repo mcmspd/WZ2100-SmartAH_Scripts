@@ -1131,3 +1131,42 @@ class SingleListingTests(unittest.TestCase):
         with unittest.mock.patch.object(ib, "spawn_new_instance") as sp:
             ib.maybe_spawn_crash_replacement()
         sp.assert_not_called()
+
+class ExitReasonTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.lobby_id, ib.instance_start_time)
+        ib.config = {"game_name": "FreeHost", "migration_name_suffix": " 2"}
+        ib.lobby_id = "own-id"
+        ib.instance_start_time = ib.time.time() - 7200
+
+    def tearDown(self):
+        (ib.config, ib.lobby_id, ib.instance_start_time) = self._old
+
+    def _clean(self):
+        return (unittest.mock.patch.object(ib, "record_restart_and_check_cap",
+                                           return_value=True),
+                unittest.mock.patch.object(ib, "unlist_self_via_api",
+                                           return_value=True),
+                unittest.mock.patch.object(ib, "family_listing_ids",
+                                           return_value=[]))
+
+    def test_game_end_label(self):
+        p1, p2, p3 = self._clean()
+        with p1, p2, p3, \
+             unittest.mock.patch.object(ib, "spawn_new_instance") as sp, \
+             unittest.mock.patch.object(ib, "log") as lg:
+            ib.maybe_spawn_crash_replacement(reason="game-ended")
+        sp.assert_called_once()
+        msgs = " ".join(str(c.args[1]) for c in lg.call_args_list)
+        self.assertIn("Game ended", msgs)
+        self.assertNotIn("crashed", msgs)
+
+    def test_crash_label_default(self):
+        p1, p2, p3 = self._clean()
+        with p1, p2, p3, \
+             unittest.mock.patch.object(ib, "spawn_new_instance") as sp, \
+             unittest.mock.patch.object(ib, "log") as lg:
+            ib.maybe_spawn_crash_replacement()
+        sp.assert_called_once()
+        msgs = " ".join(str(c.args[1]) for c in lg.call_args_list)
+        self.assertIn("crashed", msgs)
