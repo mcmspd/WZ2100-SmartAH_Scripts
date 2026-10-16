@@ -228,3 +228,67 @@ class LoopbackProxyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class BlocklistTests(unittest.TestCase):
+    def test_roundtrip(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            path = os.path.join(tmp, "block.json")
+            self.assertEqual(mitm.load_blocklist(path), set())
+            self.assertEqual(mitm.load_blocklist(None), set())
+            mitm.block_game(path, "g1")
+            mitm.block_game(path, "g1")
+            self.assertEqual(mitm.load_blocklist(path), {"g1"})
+            mitm.unblock_game(path, "g1")
+            self.assertEqual(mitm.load_blocklist(path), set())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_request_matching(self):
+        head = b"PATCH /lobby/api/v1/game/g1 HTTP/1.1\r\nHost: x\r\n\r\n"
+        self.assertEqual(mitm.request_targets_blocked_game(head, {"g1"}), "g1")
+        self.assertIsNone(mitm.request_targets_blocked_game(head, {"g2"}))
+        self.assertIsNone(mitm.request_targets_blocked_game(head, set()))
+        create = b"POST /lobby/api/v1/game HTTP/1.1\r\nHost: x\r\n\r\n"
+        self.assertIsNone(mitm.request_targets_blocked_game(create, {"g1"}))
+
+
+class KeepaliveTests(unittest.TestCase):
+    def test_patch_success(self):
+        import urllib.request
+
+        class FakeResp:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        seen = {}
+
+        def fake_urlopen(req, timeout=None):
+            seen["method"] = req.get_method()
+            seen["body"] = req.data
+            seen["auth"] = req.get_header("Authorization")
+            return FakeResp()
+
+        with unittest.mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            ok, detail = mitm.patch_lobby_keepalive(
+                "g1", "tok", lobby_address="https://example.invalid/lobby")
+        self.assertTrue(ok)
+        self.assertEqual(seen["method"], "PATCH")
+        self.assertEqual(seen["body"], b"{}")
+        self.assertEqual(seen["auth"], "HostToken tok")
+
+    def test_patch_gone(self):
+        import urllib.request
+        import urllib.error
+        err = urllib.error.HTTPError(
+            "u", 404, "not found", {},
+            __import__("io").BytesIO(b'{"code":"GAME_NOT_FOUND"}'))
+        with unittest.mock.patch.object(urllib.request, "urlopen", side_effect=err):
+            ok, detail = mitm.patch_lobby_keepalive("g1", "tok")
+        self.assertFalse(ok)
+        self.assertIn("gone=True", detail)

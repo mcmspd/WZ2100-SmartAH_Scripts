@@ -39,6 +39,7 @@
   "wz_backend": "auto",
   "wz_binary": "",
   "lobby_token_store": "",
+  "lobby_blocklist": "",
   "migration_drain_seconds": 600,
   "migration_name_suffix": " [new]",
   "max_live_sessions": 2,

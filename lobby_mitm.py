@@ -245,6 +245,56 @@ def load_lobby_token(store_path: str, game_id: str) -> dict | None:
 
 # ─── lobby API calls on behalf of an instance ─────────────────────────────────
 
+def load_blocklist(blocklist_path):
+    """Game IDs whose lobby HTTPS must fail (forces fast handler abandon)."""
+    if not blocklist_path:
+        return set()
+    try:
+        with open(blocklist_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return {str(x) for x in data}
+    except Exception:
+        pass
+    return set()
+
+
+def _save_blocklist(blocklist_path, ids):
+    os.makedirs(os.path.dirname(blocklist_path) or ".", exist_ok=True)
+    tmp = blocklist_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(sorted(ids), f)
+    os.replace(tmp, blocklist_path)
+
+
+def block_game(blocklist_path, game_id):
+    ids = load_blocklist(blocklist_path)
+    if game_id not in ids:
+        ids.add(game_id)
+        _save_blocklist(blocklist_path, ids)
+
+
+def unblock_game(blocklist_path, game_id):
+    ids = load_blocklist(blocklist_path)
+    if game_id in ids:
+        ids.discard(game_id)
+        _save_blocklist(blocklist_path, ids)
+
+
+def request_targets_blocked_game(head, blocked):
+    """Return the blocked gameId if the HTTP request line references one."""
+    if not blocked:
+        return None
+    try:
+        line = head.split(b"\r\n", 1)[0].decode("latin-1")
+        for gid in blocked:
+            if gid and gid in line:
+                return gid
+    except Exception:
+        pass
+    return None
+
+
 def build_lobby_headers(host_token: str, referer_kind: str = "mp.host") -> dict:
     return {
         "Authorization": f"HostToken {host_token}",
@@ -290,6 +340,34 @@ def delete_listing_by_game_id(game_id: str, store_path: str = TOKEN_STORE_DEFAUL
     if not entry or not entry.get("host_token"):
         return (False, f"no captured hostToken for game {game_id}")
     return delete_lobby_listing(game_id, entry["host_token"], lobby_address, started)
+
+
+def patch_lobby_keepalive(game_id: str, host_token: str,
+                          lobby_address: str = "https://wzlobby.wz2100.net/lobby",
+                          timeout: int = 30) -> tuple[bool, str]:
+    """Send an empty PATCH keepalive (exactly what stock WZ sends when idle).
+
+    Returns (ok, detail). A 404/GAME_NOT_FOUND means the entry is gone and
+    keepalives should stop.
+    """
+    import urllib.request
+    import urllib.error
+    url = f"{lobby_address.rstrip('/')}/api/v1/game/{game_id}"
+    req = urllib.request.Request(url, data=b"{}", method="PATCH",
+                                 headers=build_lobby_headers(host_token))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            code = getattr(resp, "status", 200)
+            return (200 <= code < 300, f"HTTP {code}")
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:300]
+        except Exception:
+            body = ""
+        gone = e.code == 404 or "GAME_NOT_FOUND" in body or "GAME_STALE" in body
+        return (False, f"HTTP {e.code} {body} | gone={gone}")
+    except Exception as e:
+        return (False, f"{type(e).__name__}: {e}")
 
 
 # ─── relay ────────────────────────────────────────────────────────────────────
@@ -349,7 +427,8 @@ def strip_accept_encoding(head: bytes) -> bytes:
 
 
 def handle_client(client: socket.socket, sni_allow: list, ca_key: str, ca_crt: str,
-                  certs_dir: str, store_path: str, upstream_cafile: str | None = None):
+                  certs_dir: str, store_path: str, upstream_cafile: str | None = None,
+                  blocklist_path: str | None = None):
     try:
         client.settimeout(15)
         orig_dst = get_original_dst(client)
@@ -369,7 +448,7 @@ def handle_client(client: socket.socket, sni_allow: list, ca_key: str, ca_crt: s
                 break
         if sni and sni in sni_allow:
             handle_intercepted(client, sni, orig_dst, ca_key, ca_crt, certs_dir, store_path,
-                                 upstream_cafile)
+                                 upstream_cafile, blocklist_path)
         else:
             # Not TLS or not our target: nothing consumed, relay as-is.
             handle_passthrough_prefixed(client, b"", orig_dst, sni)
@@ -383,7 +462,8 @@ def handle_client(client: socket.socket, sni_allow: list, ca_key: str, ca_crt: s
 
 def handle_intercepted(client: socket.socket, sni: str, orig_dst: tuple[str, int] | None,
                                ca_key: str, ca_crt: str, certs_dir: str, store_path: str,
-                               upstream_cafile: str | None = None):
+                               upstream_cafile: str | None = None,
+                               blocklist_path: str | None = None):
     upstream_host = orig_dst[0] if orig_dst else sni
     upstream_port = orig_dst[1] if orig_dst else 443
     crt, key = ensure_server_cert(ca_key, ca_crt, certs_dir, sni)
@@ -404,6 +484,14 @@ def handle_intercepted(client: socket.socket, sni: str, orig_dst: tuple[str, int
         cut = head.find(b"\r\n\r\n") + 4
         head, rest = head[:cut], head[cut:]
         head = strip_accept_encoding(head)
+        blocked_hit = request_targets_blocked_game(head, load_blocklist(blocklist_path))
+        if blocked_hit:
+            log(f"Blocking lobby request for game {blocked_hit} (forced abandon)")
+            try:
+                tls_client.close()
+            except Exception:
+                pass
+            return
         upstream_ctx = (_ssl.create_default_context(cafile=upstream_cafile)
                           if upstream_cafile else _ssl.create_default_context())
         upstream = upstream_ctx.wrap_socket(
@@ -472,7 +560,7 @@ def handle_passthrough_prefixed(client: socket.socket, prefix: bytes,
 
 
 def serve(port: int, sni_allow: list, ca_dir: str, certs_dir: str, store_path: str,
-          upstream_cafile: str | None = None):
+          upstream_cafile: str | None = None, blocklist_path: str | None = None):
     ca_key, ca_crt = ensure_ca(ca_dir)
     log(f"CA ready: {ca_crt} (install this cert into the system trust store)")
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -486,7 +574,7 @@ def serve(port: int, sni_allow: list, ca_dir: str, certs_dir: str, store_path: s
             threading.Thread(
                 target=handle_client,
                 args=(conn, sni_allow, ca_key, ca_crt, certs_dir, store_path,
-                      upstream_cafile),
+                      upstream_cafile, blocklist_path),
                 daemon=True,
             ).start()
     except KeyboardInterrupt:
@@ -505,9 +593,11 @@ def main():
                     help="comma-separated SNI allowlist to intercept")
     ap.add_argument("--upstream-cafile", default=None,
                     help="extra CA bundle for verifying upstream (testing only)")
+    ap.add_argument("--blocklist", default=None,
+                    help="JSON list file of game IDs whose lobby HTTPS must fail")
     args = ap.parse_args()
     serve(args.port, [s.strip() for s in args.sni.split(",") if s.strip()],
-          args.ca, args.certs, args.tokens, args.upstream_cafile)
+          args.ca, args.certs, args.tokens, args.upstream_cafile, args.blocklist)
 
 
 if __name__ == "__main__":

@@ -407,3 +407,43 @@ class LobbyNameTests(unittest.TestCase):
     def test_unsafe_names(self):
         for bad in ["", "FreeHost (new)", "a/b", "x" * 61, "semi;colon", "quo\"te"]:
             self.assertFalse(ib.is_lobby_safe_name(bad), bad)
+
+class MigrateFlowTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.process, ib.roster)
+        ib.config = {"game_name": "G", "migration_name_suffix": " [new]",
+                     "migration_drain_seconds": 600}
+        ib.process = None
+
+    def tearDown(self):
+        ib.config, ib.process, ib.roster = self._old
+
+    def test_redirect_path(self):
+        ib.roster = {"P1": {"type": "player", "name": "Ann", "pos": 0, "idx": 0,
+                            "is_spec": False, "ip": "1.1.1.1"}}
+        calls = []
+
+        def fake_send(cmd, log_command=True):
+            calls.append(cmd)
+            return True
+
+        with unittest.mock.patch.object(ib, "send_cmd", fake_send), \
+             unittest.mock.patch.object(ib.lobby_mitm, "block_game") as bg, \
+             unittest.mock.patch.object(ib, "wait_for_abandon", return_value=True), \
+             unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
+             unittest.mock.patch.object(ib, "start_lobby_keepalive") as ka, \
+             unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
+             unittest.mock.patch.object(ib.time, "sleep", return_value=None):
+            self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G [new]", "t"))
+        bg.assert_called_once()
+        ka.assert_called_once_with("gid-1")
+        self.assertTrue(any(c.startswith("redirect identity P1 ") for c in calls))
+
+    def test_fallback_path(self):
+        ib.roster = {}
+        with unittest.mock.patch.object(ib.lobby_mitm, "block_game",
+                                        side_effect=OSError("disk full")), \
+             unittest.mock.patch.object(ib, "announce_and_drain",
+                                        return_value=True) as ad:
+            self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G [new]", "t"))
+        ad.assert_called_once_with("G [new]", 2101)

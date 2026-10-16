@@ -78,6 +78,7 @@ stdin_ready = False
 room_state = None  # latest __WZROOMSTATUS__ data.state ("lobby"/"starting"/"started"/...)
 startup_status_event = threading.Event()
 startup_error = None
+startup_done = False  # set once lobby verification succeeds
 last_chat_log = None
 last_chat_log_time = 0.0
 current_map_name = ""
@@ -185,6 +186,29 @@ def wait_for_new_instance_ready(session_name: str, timeout: float = 60.0) -> dic
         time.sleep(0.5)
     log("WARN", f"Timed out waiting for {session_name} to verify lobby ID.")
     return None
+
+
+def blocklist_path() -> str:
+    """Shared proxy blocklist file (bot writes, proxy enforces)."""
+    return config.get("lobby_blocklist") or os.path.join(STATUS_DIR, ".lobby_blocklist.json")
+
+
+def wait_for_abandon(session_name: str, timeout: float = 150.0) -> bool:
+    """Wait until an instance reports its lobby handler gone (delisted).
+
+    Used after proxy-blocking a successor's lobby HTTPS: its PATCHes fail,
+    the handler gives up within seconds, and the instance reports
+    'delisted' while staying up with direct joins open.
+    """
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        status = read_session_status(session_name)
+        if status and status.get("status") == "delisted":
+            return True
+        if status and status.get("status") in ("failed", "exited"):
+            return False
+        time.sleep(2)
+    return False
 
 # ─── Dynamic Config & Instances ───────────────────────────────────────────────
 
@@ -516,6 +540,79 @@ def is_own_host_entry(entry: dict) -> bool:
     host_name = config.get("host_name", "")
     return bool(host_name and entry.get("name") == host_name
                 and entry.get("is_spec") and entry.get("ip") in (None, "-", ""))
+
+
+def redirect_all_players(new_port: int) -> int:
+    """Send `redirect identity` for every real player/spec (skips own host slot).
+
+    NOTE: stock clients direct-connect without lobby tokens, which a
+    lobby-connected host rejects (ERROR_WRONGDATA). Only use this after the
+    target's lobby handler has been driven offline (proxy blocklist +
+    abandon), or expect failures.
+    """
+    with roster_lock:
+        roster_snapshot = list(roster.items())
+
+    game_pw = config.get("game_password", "")
+    count = 0
+    for pk, entry in roster_snapshot:
+        if not pk or pk == "-":
+            continue
+        if is_own_host_entry(entry):
+            continue
+        is_spec = 1 if entry.get("is_spec", False) else 0
+        if game_pw:
+            conn_str = f"tcp:{new_port}:{is_spec}:{game_pw}"
+        else:
+            conn_str = f"tcp:{new_port}:{is_spec}"
+
+        player_name = entry.get("name", "Unknown")
+        log("REDIRECT", f"Redirecting {player_name} ({pk}) to {conn_str}")
+        send_cmd(f"redirect identity {pk} {conn_str}")
+        count += 1
+    log("REDIRECT", f"Redirect command issued for {count} connection(s).")
+    return count
+
+
+_keepalive_threads: dict = {}
+_keepalive_lock = threading.Lock()
+
+
+def start_lobby_keepalive(game_id: str, interval: float = 25.0):
+    """Keep a migrated-into listing warm via Python PATCH keepalives.
+
+    Used after the target's own lobby handler was driven offline (its own
+    PATCHes stopped). Stops itself when the server reports the entry gone.
+    """
+    with _keepalive_lock:
+        if game_id in _keepalive_threads and _keepalive_threads[game_id].is_alive():
+            return
+        stop = threading.Event()
+
+        def _loop():
+            store_path = config.get("lobby_token_store") or lobby_mitm.TOKEN_STORE_DEFAULT
+            lobby_address = get_wz_lobbyserver() or config.get(
+                "lobby_address", "https://wzlobby.wz2100.net/lobby")
+            while not stop.wait(interval):
+                entry = lobby_mitm.load_lobby_token(store_path, game_id)
+                if not entry or not entry.get("host_token"):
+                    log("KEEPALIVE", f"No token for {game_id}; stopping keepalive.")
+                    break
+                ok, detail = lobby_mitm.patch_lobby_keepalive(
+                    game_id, entry["host_token"], lobby_address)
+                if not ok:
+                    log("KEEPALIVE", f"PATCH {game_id}: {detail}")
+                    if "gone=True" in detail:
+                        break
+                    # Transport blip: keep trying; the lobby tolerates gaps.
+            with _keepalive_lock:
+                _keepalive_threads.pop(game_id, None)
+
+        t = threading.Thread(target=_loop, daemon=True,
+                             name=f"keepalive-{game_id[:8]}")
+        _keepalive_threads[game_id] = t
+        t.start()
+        log("KEEPALIVE", f"Started Python keepalive for {game_id} every {interval:.0f}s.")
 
 
 def lobby_has_drained() -> bool:
@@ -942,6 +1039,62 @@ def announce_successor(game_name: str, new_port: int):
     bcast("This lobby will close once everyone has moved over.")
 
 
+def migrate_to_successor(new_port: int, new_session: str, new_lobby_id: str,
+                          game_name: str, reason: str) -> bool:
+    """Move players to a ready successor, then shut this instance down.
+
+    Primary path (seamless): proxy-block the successor's lobby HTTPS so its
+    handler abandons the listing (direct joins open up), `redirect identity`
+    everyone over, and start Python keepalives for its listing.
+    Fallback path: announce the successor and wait for manual rejoin.
+    Returns True when this instance should shut down afterwards.
+    """
+    log("MIGRATE", f"Fresh instance {new_session} ready with lobby ID {new_lobby_id}.")
+    try:
+        lobby_mitm.block_game(blocklist_path(), new_lobby_id)
+    except Exception as e:
+        log("WARN", f"Could not write proxy blocklist ({e}); using manual-rejoin fallback.")
+        return announce_and_drain(game_name, new_port)
+
+    log("MIGRATE", "Waiting for successor lobby handler to go offline (direct joins open)...")
+    if not wait_for_abandon(new_session, timeout=150.0):
+        log("WARN", "Successor did not report offline; using manual-rejoin fallback.")
+        try:
+            lobby_mitm.unblock_game(blocklist_path(), new_lobby_id)
+        except Exception:
+            pass
+        return announce_and_drain(game_name, new_port)
+
+    if not request_roster_refresh():
+        log("WARN", "No fresh roster before redirect; using last known roster.")
+    bcast(f"Moving everyone to {game_name} now - hold on...")
+    moved = redirect_all_players(new_port)
+    log("MIGRATE", f"Redirect commands issued for {moved} connection(s).")
+    start_lobby_keepalive(new_lobby_id)
+    time.sleep(30)  # let clients complete the auto-follow handshake
+    if lobby_has_drained():
+        log("MIGRATE", "Lobby drained via redirect. Shutting down old instance.")
+        return True
+    log("MIGRATE", "Some players did not follow the redirect; falling back to manual rejoin.")
+    try:
+        lobby_mitm.unblock_game(blocklist_path(), new_lobby_id)
+    except Exception:
+        pass
+    return announce_and_drain(game_name, new_port)
+
+
+def announce_and_drain(game_name: str, new_port: int) -> bool:
+    """Fallback path: announce the successor, wait for manual rejoin."""
+    announce_successor(game_name, new_port)
+    drain = float(config.get("migration_drain_seconds", MIGRATION_DRAIN_SECONDS))
+    if wait_for_drain(drain):
+        log("MIGRATE", "Lobby drained. Shutting down old instance.")
+    else:
+        log("MIGRATE", "Drain deadline passed with players still here. Shutting down anyway.")
+        bcast("Closing this lobby now. Please rejoin the new lobby from the list.")
+    return True
+
+
 def _migration_backoff_delay() -> float:
     with migration_lock:
         attempts = migration_attempts
@@ -995,14 +1148,8 @@ def _start_timeout_expired():
         if status and status.get("lobby_id"):
             new_lobby_id = status["lobby_id"]
             game_name = config.get("game_name", "") + config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX)
-            log("MIGRATE", f"Fresh instance {new_session} ready with lobby ID {new_lobby_id}. Announcing it for manual rejoin...")
-            announce_successor(game_name, new_port)
-            drain = float(config.get("migration_drain_seconds", MIGRATION_DRAIN_SECONDS))
-            if wait_for_drain(drain):
-                log("MIGRATE", "Lobby drained. Shutting down old instance.")
-            else:
-                log("MIGRATE", "Drain deadline passed with players still here. Shutting down anyway.")
-                bcast("Closing this lobby now. Please rejoin the new lobby from the list.")
+            if not migrate_to_successor(new_port, new_session, new_lobby_id, game_name, "timeout"):
+                return
             with migration_lock:
                 migration_attempts = 0
             quit_after_game = True
@@ -1487,14 +1634,10 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
                 if status and status.get("lobby_id"):
                     new_lobby_id = status["lobby_id"]
                     game_name = config.get("game_name", "") + config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX)
-                    log("MIGRATE", f"New instance {new_session} ready with lobby ID {new_lobby_id}. Announcing it for manual rejoin...")
-                    announce_successor(game_name, new_port)
-                    drain = float(config.get("migration_drain_seconds", MIGRATION_DRAIN_SECONDS))
-                    if wait_for_drain(drain):
-                        log("MIGRATE", "Lobby drained. Shutting down old instance.")
-                    else:
-                        log("MIGRATE", "Drain deadline passed with players still here. Shutting down anyway.")
-                        bcast("Closing this lobby now. Please rejoin the new lobby from the list.")
+                    if not migrate_to_successor(new_port, new_session, new_lobby_id, game_name, "map-change"):
+                        with map_change_lock:
+                            map_change_in_progress = False
+                        return
                     quit_after_game = True
                     with map_change_lock:
                         map_change_in_progress = False
@@ -1795,6 +1938,12 @@ def process_line(line: str):
         startup_error = line[len("WZEVENT: "):].strip()
         log("ERROR", f"Lobby startup error: {startup_error}")
         startup_status_event.set()
+        # A post-ready lobbyerror means our listing is gone server-side
+        # (e.g. after proxy-block abandon or an external DELETE) while the
+        # game keeps running. Report it so migration can proceed.
+        if startup_done and lobby_id:
+            write_session_status(session_global, "delisted", port_global,
+                                 lobby_id=lobby_id, error=startup_error)
     elif line.startswith("WZEVENT:"):
         log("EVENT", line[len("WZEVENT: "):])
     elif line.startswith("WZCMD: stdinReadReady"):
@@ -2034,7 +2183,7 @@ def main():
     global process, config, greetings, log_file_handle, log_file_path, game_started, start_timeout_timer
     global port_global, session_global, quit_after_game
     global instance_start_time
-    global lobby_id, startup_error, stdin_ready, room_state
+    global lobby_id, startup_error, stdin_ready, room_state, startup_done
     global current_map_name, current_map_mods
 
     # Args: [port] [session_name] [map_name] [mods_csv] [name_suffix]
@@ -2134,6 +2283,7 @@ def main():
 
         lobby_id = None
         startup_error = None
+        startup_done = False
         stdin_ready = False
         room_state = None
         startup_status_event.clear()
@@ -2171,6 +2321,7 @@ def main():
         if verification_failure is None:
             log("INFO", f"Lobby ready after launch: id={lobby_id} port={port_global}")
             write_session_status(session_global, "ready", port_global, lobby_id=lobby_id)
+            startup_done = True
             process.wait()
         else:
             if verification_failure.startswith("lobbyerror"):
