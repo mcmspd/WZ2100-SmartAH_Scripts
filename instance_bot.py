@@ -973,7 +973,11 @@ def _start_timeout_expired():
         log("TIMEOUT", f"{mins}-minute start window expired. Spawning new instance to migrate players...")
         bcast("Lobby timeout expired. Launching fresh lobby...")
         if not unlist_self_via_api():
-            log("WARN", "Proceeding without freeing the lobby slot; new listing may be rejected.")
+            log("WARN", "Aborting migration: lobby slot still held and no token to free it.")
+            bcast("Migration aborted: could not free the lobby slot. Admins, check the lobby proxy.")
+            with migration_lock:
+                migration_attempts += 1
+            return
         spawned = spawn_new_instance(current_map_name or config.get("map_name", ""),
                                      list(current_map_mods),
                                      name_suffix=config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX))
@@ -1460,7 +1464,11 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
             global quit_after_game, map_change_in_progress, migration_attempts
             try:
                 if not unlist_self_via_api():
-                    log("WARN", "Proceeding without freeing the lobby slot; new listing may be rejected.")
+                    log("WARN", "Aborting map change: lobby slot still held and no token to free it.")
+                    bcast("Map change aborted: could not free the lobby slot.")
+                    with map_change_lock:
+                        map_change_in_progress = False
+                    return
                 spawned = spawn_new_instance(map_to_load, mods_to_load,
                                              name_suffix=config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX))
                 if spawned is None:
