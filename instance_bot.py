@@ -44,7 +44,9 @@ MAX_LOBBY_ID_RESTARTS = 3
 MAPS_DIR         = os.path.join(SCRIPT_DIR, "maps")
 MODS_DIR         = os.path.join(SCRIPT_DIR, "mods")
 AUTOHOST_DIR     = os.path.join(SCRIPT_DIR, "autohost")
-MAX_LIVE_SESSIONS = 2   # refuse to spawn when this many WZ_* tmux sessions live
+MAX_LIVE_SESSIONS = 3   # refuse to spawn when this many WZ_* tmux sessions live
+# (steady state is 2 during a game: in-game parent + listed successor, so a
+# migration needs a transient 3rd slot)
 MIN_UPTIME_TO_RESPAWN = 120  # seconds: only auto-respawn a crashed instance this old
 MAX_RESTARTS_PER_HOUR = 3    # give up respawning after this many restarts in 3600s
 MIGRATION_RETRY_BASE = 600   # seconds: base delay before retrying a failed migration

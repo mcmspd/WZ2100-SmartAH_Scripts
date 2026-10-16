@@ -1010,3 +1010,24 @@ class GameSuccessorTests(unittest.TestCase):
             self.assertTrue(ib.crash_respawn_allowed())
         ib.game_successor_session = None
         self.assertTrue(ib.crash_respawn_allowed())
+
+class SpawnCapTests(unittest.TestCase):
+    def _spawn(self, live):
+        with unittest.mock.patch.object(ib, "prune_stale_status_files"), \
+             unittest.mock.patch.object(ib, "reap_dead_sessions", return_value=0), \
+             unittest.mock.patch.object(ib, "count_live_sessions", return_value=live), \
+             unittest.mock.patch.object(ib, "find_available_port", return_value=2105), \
+             unittest.mock.patch.object(ib, "clear_session_status"), \
+             unittest.mock.patch.object(ib.subprocess, "Popen"):
+            return ib.spawn_new_instance("M", [])
+
+    def test_spawn_allowed_below_cap(self):
+        got = self._spawn(2)
+        self.assertIsNotNone(got)
+        self.assertEqual(got[0], 2105)
+
+    def test_spawn_refused_at_cap(self):
+        self.assertIsNone(self._spawn(3))
+
+    def test_default_cap_leaves_migration_spare(self):
+        self.assertGreaterEqual(ib.MAX_LIVE_SESSIONS, 3)
