@@ -1,0 +1,116 @@
+{
+ "Emplacement-ATGM": {
+  "armour": 10,
+  "breadth": 1,
+  "buildPoints": 400,
+  "buildPower": 250,
+  "height": 1,
+  "hitpoints": 400,
+  "id": "Emplacement-ATGM",
+  "name": "ATGM Emplacement",
+  "resistance": 150,
+  "sensorID": "DefaultSensor1Mk1",
+  "strength": "HARD",
+  "structureModel": [
+   "blhardpt.pie"
+  ],
+  "thermal": 10,
+  "type": "DEFENSE",
+  "weapons": [
+   "Rocket-ATGM"
+  ],
+  "width": 1
+ },
+ "X-Super-AA": {
+  "armour": 15,
+  "breadth": 2,
+  "buildPoints": 1750,
+  "buildPower": 600,
+  "combinesWithWall": true,
+  "height": 4,
+  "hitpoints": 2800,
+  "id": "X-Super-AA",
+  "name": "AA Flak Fortress",
+  "resistance": 100,
+  "sensorID": "FortressSensor",
+  "strength": "HARD",
+  "structureModel": [
+   "stwpfcan.pie"
+  ],
+  "thermal": 15,
+  "type": "FORTRESS",
+  "weapons": [
+   "AAGunSuper"
+  ],
+  "width": 2
+ },
+ "X-Super-AG": {
+  "armour": 8,
+  "breadth": 2,
+  "buildPoints": 1000,
+  "buildPower": 500,
+  "combinesWithWall": true,
+  "height": 2,
+  "hitpoints": 1600,
+  "id": "X-Super-AG",
+  "name": "Assault Gun Fortress",
+  "resistance": 100,
+  "sensorID": "FortressSensor",
+  "strength": "HARD",
+  "structureModel": [
+   "stwpfcan.pie"
+  ],
+  "thermal": 8,
+  "type": "FORTRESS",
+  "weapons": [
+   "AGFort"
+  ],
+  "width": 2
+ },
+ "X-Super-Flame": {
+  "armour": 8,
+  "breadth": 2,
+  "buildPoints": 1000,
+  "buildPower": 500,
+  "combinesWithWall": true,
+  "height": 2,
+  "hitpoints": 1600,
+  "id": "X-Super-Flame",
+  "name": "Flamer Fortress",
+  "resistance": 100,
+  "sensorID": "FortressSensor",
+  "strength": "HARD",
+  "structureModel": [
+   "stwpfcan.pie"
+  ],
+  "thermal": 8,
+  "type": "FORTRESS",
+  "weapons": [
+   "FlameSuper"
+  ],
+  "width": 2
+ },
+ "X-Super-Laser": {
+  "armour": 15,
+  "breadth": 2,
+  "buildPoints": 2000,
+  "buildPower": 1000,
+  "combinesWithWall": true,
+  "height": 2,
+  "hitpoints": 3200,
+  "id": "X-Super-Laser",
+  "name": "Laser Fortress",
+  "resistance": 100,
+  "sensorID": "FortressSensor",
+  "strength": "HARD",
+  "structureModel": [
+   "stwpfcan.pie"
+  ],
+  "thermal": 15,
+  "type": "FORTRESS",
+  "weapons": [
+   "LaserSuper"
+  ],
+  "width": 2
+ }
+}
