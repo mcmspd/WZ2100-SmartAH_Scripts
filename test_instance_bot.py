@@ -1189,3 +1189,16 @@ class ExitReasonTests(unittest.TestCase):
         sp.assert_called_once()
         msgs = " ".join(str(c.args[1]) for c in lg.call_args_list)
         self.assertIn("crashed", msgs)
+
+class OneChildTests(unittest.TestCase):
+    def test_game_start_skips_when_child_exists(self):
+        ib.game_successor_session = "S"
+        ib.game_started = True
+        try:
+            with unittest.mock.patch.object(ib, "spawn_new_instance") as sp:
+                ib._spawn_game_successor()
+            sp.assert_not_called()
+        finally:
+            ib.game_successor_session = None
+            ib.game_started = False
+            ib.map_change_in_progress = False

@@ -994,6 +994,9 @@ def _spawn_game_successor():
         log("GAME", "A migration is already in progress; skipping game-start successor.")
         return
     try:
+        if game_successor_session is not None:
+            log("GAME", f"Successor {game_successor_session} already spawned; one child per game.")
+            return
         with start_timeout_lock:
             if not game_started or process is None or process.poll() is not None:
                 return
