@@ -52,7 +52,8 @@
         "More_Fort",
         "Survival_Mod"
       ],
-      "survival": true
+      "survival": true,
+      "autostart_players": 1
     }
   ],
   "wz_headless": true,
