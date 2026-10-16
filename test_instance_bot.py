@@ -81,8 +81,14 @@ class ConfigMapTests(unittest.TestCase):
     def test_configured_list_is_authoritative(self):
         ib.config = {"maps": [{"name": "A", "mods": ["m1"]}, "B"]}
         self.assertEqual(ib.get_available_maps(), ["A", "B"])
-        self.assertEqual(ib.get_map_entry("A"), {"name": "A", "mods": ["m1"]})
+        self.assertEqual(ib.get_map_entry("A"),
+                         {"name": "A", "file": "A.wz", "mods": ["m1"]})
         self.assertIsNone(ib.get_map_entry("ZZZ"))
+
+    def test_map_file_field(self):
+        ib.config = {"maps": [{"name": "W", "file": "5c-W.wz", "mods": []}]}
+        self.assertEqual(ib.resolve_map_file("W"), "5c-W.wz")
+        self.assertEqual(ib.resolve_map_file("Other"), "Other.wz")
 
     def test_dir_fallback_without_key(self):
         ib.config = {}
@@ -94,7 +100,7 @@ class ConfigMapTests(unittest.TestCase):
                      "authorized_pkeys": []}
         errors = ib.validate_config()
         self.assertTrue(any("Ghost.wz" in e for e in errors))
-        self.assertTrue(any("nope.wz" in e for e in errors))
+        self.assertTrue(any("nope" in e and "mod" in e for e in errors))
 
     def test_mod_name_safety(self):
         self.assertTrue(ib.is_safe_mod_name("Cool-Mod_v2.wz".replace(".wz", "")))
@@ -562,3 +568,38 @@ class MigrateMessagesTests(unittest.TestCase):
         text = " ".join(sent)
         self.assertIn("rejoin", text)
         self.assertIn("one automatic", text)
+
+class ModSourceTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile, shutil
+        self._old_mods = ib.MODS_DIR
+        self.tmp = tempfile.mkdtemp()
+        ib.MODS_DIR = self.tmp
+
+    def tearDown(self):
+        ib.MODS_DIR = self._old_mods
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_file_and_dir_sources(self):
+        import os
+        open(os.path.join(self.tmp, "M.wz"), "w").write("x")
+        os.makedirs(os.path.join(self.tmp, "D", "sub"))
+        self.assertEqual(ib.resolve_mod_source("M")[0], "file")
+        self.assertEqual(ib.resolve_mod_source("D")[0], "dir")
+        self.assertIsNone(ib.resolve_mod_source("Nope"))
+
+    def test_old_format_lev_players(self):
+        import os
+        import zipfile
+        zpath = os.path.join(self.tmp, "Old.wz")
+        with zipfile.ZipFile(zpath, "w") as z:
+            z.writestr("x.lev", "level Foo\nplayers 5\ntype 14\n")
+        ib.MODS_DIR = self.tmp  # noqa (maps test below overrides MAPS_DIR)
+        old_maps = ib.MAPS_DIR
+        ib.MAPS_DIR = self.tmp
+        try:
+            info = ib.extract_map_info("Old")
+            self.assertEqual(info["players"], 5)
+        finally:
+            ib.MAPS_DIR = old_maps

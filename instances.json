@@ -26,7 +26,8 @@
     {"name": "NTW_5v5Full_RQ", "mods": []},
     {"name": "NTW-Full2v2", "mods": []},
     {"name": "Opa-Shtorm-A-FB", "mods": []},
-    {"name": "RO_1v1Full", "mods": []}
+    {"name": "RO_1v1Full", "mods": []},
+    {"name": "5c-Warwick", "file": "5c-Warwick-2fe6272eb3d03888fd238019d06319732987ce16b793bf78b7b5236cdca84371.wz", "mods": ["More_Fort", "Survival_Mod"]}
   ],
   "wz_headless": true,
   "wz_nosound": true,

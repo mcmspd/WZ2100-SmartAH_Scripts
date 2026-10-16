@@ -338,11 +338,32 @@ def is_safe_mod_name(name: str) -> bool:
 
 
 def get_map_entry(map_name: str) -> dict | None:
-    """Look up a configured map entry {name, mods}. Returns None if unknown."""
+    """Look up a configured map entry {name, file, mods}. Returns None if unknown."""
     for entry in config.get("maps", []) or []:
         if isinstance(entry, dict) and entry.get("name") == map_name:
             mods = entry.get("mods", [])
-            return {"name": map_name, "mods": list(mods) if isinstance(mods, list) else []}
+            filename = entry.get("file") or f"{map_name}.wz"
+            return {"name": map_name, "file": filename,
+                    "mods": list(mods) if isinstance(mods, list) else []}
+    return None
+
+
+def resolve_map_file(map_name: str) -> str:
+    """Archive filename for a map (explicit `file` field or `<name>.wz`)."""
+    entry = get_map_entry(map_name)
+    if entry:
+        return entry["file"]
+    return f"{map_name}.wz"
+
+
+def resolve_mod_source(mod: str) -> tuple[str, str] | None:
+    """Locate a mod as (kind, path): kind is 'file' (<mod>.wz) or 'dir' (<mod>/)."""
+    wz_path = os.path.join(MODS_DIR, f"{mod}.wz")
+    if os.path.isfile(wz_path):
+        return ("file", wz_path)
+    dir_path = os.path.join(MODS_DIR, mod)
+    if os.path.isdir(dir_path):
+        return ("dir", dir_path)
     return None
 
 
@@ -375,13 +396,14 @@ def validate_config() -> list[str]:
             if not name:
                 errors.append("maps entry without a name")
                 continue
-            if not os.path.exists(os.path.join(MAPS_DIR, f"{name}.wz")):
-                errors.append(f"map missing on disk: {name}.wz")
+            filename = entry.get("file", f"{name}.wz") if isinstance(entry, dict) else f"{name}.wz"
+            if "/" in filename or not os.path.exists(os.path.join(MAPS_DIR, filename)):
+                errors.append(f"map missing on disk: {filename}")
             for mod in mods or []:
                 if not is_safe_mod_name(mod):
                     errors.append(f"unsafe mod name for map {name}: {mod!r}")
-                elif not os.path.exists(os.path.join(MODS_DIR, f"{mod}.wz")):
-                    errors.append(f"mod missing on disk for map {name}: {mod}.wz")
+                elif resolve_mod_source(mod) is None:
+                    errors.append(f"mod missing on disk for map {name}: {mod} (.wz or /)")
     default_map = config.get("map_name")
     if default_map and "maps" in config and get_map_entry(default_map) is None:
         errors.append(f"default map_name {default_map!r} not present in maps list")
@@ -415,18 +437,34 @@ def maybe_signal_ready():
             log("INFO", f"Lobby ready: id={lobby_id} port={port_global}")
             startup_status_event.set()
 
-def extract_map_info(map_name: str) -> dict:
-    wz_path = os.path.join(MAPS_DIR, f"{map_name}.wz")
+def extract_map_info(map_name: str, map_file: str | None = None) -> dict | None:
+    """Read player count from a map archive (new level.json or old .lev format)."""
+    filename = map_file or f"{map_name}.wz"
+    wz_path = os.path.join(MAPS_DIR, filename)
     if not os.path.exists(wz_path):
         return None
     try:
         with zipfile.ZipFile(wz_path, 'r') as z:
-            with z.open('level.json') as f:
-                level_data = json.load(f)
-                return {
-                    "name": map_name,
-                    "players": level_data.get("players", 2)
-                }
+            names = z.namelist()
+            if 'level.json' in names:
+                with z.open('level.json') as f:
+                    level_data = json.load(f)
+                    return {
+                        "name": map_name,
+                        "players": level_data.get("players", 2)
+                    }
+            # Old format: parse "players N" from each .lev file, take the max.
+            best = 0
+            for n in names:
+                if n.endswith('.lev'):
+                    with z.open(n) as f:
+                        text = f.read().decode("utf-8", errors="replace")
+                    for m in re.finditer(r"^\s*players\s+(\d+)", text, re.MULTILINE):
+                        best = max(best, int(m.group(1)))
+            if best > 0:
+                return {"name": map_name, "players": best}
+            log("WARN", f"No player count found in {filename}")
+            return None
     except Exception as e:
         log("WARN", f"Failed to extract map info: {e}")
         return None
@@ -443,17 +481,23 @@ def generate_configs(
     host_key: str = "",
     mods: list | None = None,
 ):
-    info = extract_map_info(map_name)
+    entry = get_map_entry(map_name)
+    map_file = (entry["file"] if entry and entry.get("file")
+                else f"{map_name}.wz")
+    info = extract_map_info(map_name, map_file)
     if not info:
         return False
     mods = list(mods or [])
+    staged = []
     for mod in mods:
         if not is_safe_mod_name(mod):
             log("WARN", f"Refusing to stage unsafe mod name: {mod!r}")
             return False
-        if not os.path.exists(os.path.join(MODS_DIR, f"{mod}.wz")):
-            log("WARN", f"Mod file missing, aborting config generation: {mod}.wz")
+        found = resolve_mod_source(mod)
+        if found is None:
+            log("WARN", f"Mod missing on disk, aborting config generation: {mod}")
             return False
+        staged.append((mod,) + found)
 
     players = info["players"]
     
@@ -521,23 +565,30 @@ def generate_configs(
         with open(sta2_path, "w", encoding="utf-8") as f:
             f.write(f"WZ.STA.v3\n0 0 0 0 0\n{host_key.strip()}\n")
         
-    # Copy map file into config maps directory
+    # Copy map file into config maps directory (keep its real filename:
+    # hash-named downloads will not match <name>.wz)
     target_maps_dir = os.path.join(configdir, "maps")
     os.makedirs(target_maps_dir, exist_ok=True)
-    source_map_path = os.path.join(MAPS_DIR, f"{map_name}.wz")
-    target_map_path = os.path.join(target_maps_dir, f"{map_name}.wz")
+    source_map_path = os.path.join(MAPS_DIR, map_file)
+    target_map_path = os.path.join(target_maps_dir, map_file)
     if os.path.exists(source_map_path):
         shutil.copy2(source_map_path, target_map_path)
+    else:
+        log("WARN", f"Map file missing, aborting config generation: {map_file}")
+        return False
 
-    # Stage per-map mods into the config mods directory (mirrors maps/)
-    if mods:
+    # Stage per-map mods into the config mods directory (mirrors maps/).
+    # Both .wz files and mod directories are supported.
+    if staged:
         target_mods_dir = os.path.join(configdir, "mods", "multiplay")
         os.makedirs(target_mods_dir, exist_ok=True)
-        for mod in mods:
-            source_mod_path = os.path.join(MODS_DIR, f"{mod}.wz")
-            target_mod_path = os.path.join(target_mods_dir, f"{mod}.wz")
-            shutil.copy2(source_mod_path, target_mod_path)
-        log("INFO", f"Staged {len(mods)} mod(s) for map {map_name}: {', '.join(mods)}")
+        for mod, kind, source in staged:
+            if kind == "file":
+                shutil.copy2(source, os.path.join(target_mods_dir, f"{mod}.wz"))
+            else:
+                shutil.copytree(source, os.path.join(target_mods_dir, mod),
+                                dirs_exist_ok=True)
+        log("INFO", f"Staged {len(staged)} mod(s) for map {map_name}: {', '.join(mods)}")
 
     return ah_name
 
@@ -2240,12 +2291,12 @@ def main():
     for problem in validate_config():
         log("WARN", f"Config validation: {problem}")
 
-    if not extract_map_info(current_map_name):
+    if not extract_map_info(current_map_name, resolve_map_file(current_map_name)):
         log("ERROR", f"Map not available, refusing to start: {current_map_name}")
         write_session_status(session_global, "failed", port_global, error=f"unknown map {current_map_name}")
         sys.exit(1)
     for mod in current_map_mods:
-        if not is_safe_mod_name(mod) or not os.path.exists(os.path.join(MODS_DIR, f"{mod}.wz")):
+        if not is_safe_mod_name(mod) or resolve_mod_source(mod) is None:
             log("ERROR", f"Mod not available, refusing to start: {mod}")
             write_session_status(session_global, "failed", port_global, error=f"unknown mod {mod}")
             sys.exit(1)
