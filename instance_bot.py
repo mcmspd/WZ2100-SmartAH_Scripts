@@ -614,45 +614,12 @@ def redirect_all_players(new_port: int) -> int:
     return count
 
 
-_keepalive_threads: dict = {}
-_keepalive_lock = threading.Lock()
-
-
-def start_lobby_keepalive(game_id: str, interval: float = 25.0):
-    """Keep a migrated-into listing warm via Python PATCH keepalives.
-
-    Used after the target's own lobby handler was driven offline (its own
-    PATCHes stopped). Stops itself when the server reports the entry gone.
-    """
-    with _keepalive_lock:
-        if game_id in _keepalive_threads and _keepalive_threads[game_id].is_alive():
-            return
-        stop = threading.Event()
-
-        def _loop():
-            store_path = config.get("lobby_token_store") or lobby_mitm.TOKEN_STORE_DEFAULT
-            lobby_address = get_wz_lobbyserver() or config.get(
-                "lobby_address", "https://wzlobby.wz2100.net/lobby")
-            while not stop.wait(interval):
-                entry = lobby_mitm.load_lobby_token(store_path, game_id)
-                if not entry or not entry.get("host_token"):
-                    log("KEEPALIVE", f"No token for {game_id}; stopping keepalive.")
-                    break
-                ok, detail = lobby_mitm.patch_lobby_keepalive(
-                    game_id, entry["host_token"], lobby_address)
-                if not ok:
-                    log("KEEPALIVE", f"PATCH {game_id}: {detail}")
-                    if "gone=True" in detail:
-                        break
-                    # Transport blip: keep trying; the lobby tolerates gaps.
-            with _keepalive_lock:
-                _keepalive_threads.pop(game_id, None)
-
-        t = threading.Thread(target=_loop, daemon=True,
-                             name=f"keepalive-{game_id[:8]}")
-        _keepalive_threads[game_id] = t
-        t.start()
-        log("KEEPALIVE", f"Started Python keepalive for {game_id} every {interval:.0f}s.")
+# NOTE: there is deliberately NO Python keepalive thread. Keeping a listing
+# alive is WZ's own job (it PATCHes every <=30s while its handler lives).
+# Once a handler is gone (migrated-into instances), the server flags the
+# entry (HOST_NO_KEEPALIVE) and refuses PATCHes (406) — proven live — so a
+# Python keepalive would only burn API calls against a throttled lobby.
+# Fresh listings (new age) come from migrations, not PATCHes.
 
 
 def lobby_has_drained() -> bool:
@@ -1125,7 +1092,6 @@ def migrate_to_successor(new_port: int, new_session: str, new_lobby_id: str,
           "lobby list manually instead.")
     moved = redirect_all_players(new_port)
     log("MIGRATE", f"Redirect commands issued for {moved} connection(s).")
-    start_lobby_keepalive(new_lobby_id)
     time.sleep(30)  # let clients complete the auto-follow handshake
     if lobby_has_drained():
         log("MIGRATE", "Lobby drained via redirect. Shutting down old instance.")

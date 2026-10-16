@@ -426,7 +426,6 @@ class MigrateFlowTests(unittest.TestCase):
              unittest.mock.patch.object(ib, "wait_for_abandon", return_value=True), \
              unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
              unittest.mock.patch.object(ib, "redirect_all_players", return_value=1), \
-             unittest.mock.patch.object(ib, "start_lobby_keepalive"), \
              unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
              unittest.mock.patch.object(ib.time, "sleep", return_value=None):
             self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G 2", "t"))
@@ -445,12 +444,10 @@ class MigrateFlowTests(unittest.TestCase):
              unittest.mock.patch.object(ib.lobby_mitm, "block_game") as bg, \
              unittest.mock.patch.object(ib, "wait_for_abandon", return_value=True), \
              unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
-             unittest.mock.patch.object(ib, "start_lobby_keepalive") as ka, \
              unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
              unittest.mock.patch.object(ib.time, "sleep", return_value=None):
             self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G [new]", "t"))
         bg.assert_called_once()
-        ka.assert_called_once_with("gid-1")
         self.assertTrue(any(c.startswith("redirect identity P1 ") for c in calls))
 
     def test_fallback_path(self):
@@ -528,7 +525,6 @@ class MigrateMessagesTests(unittest.TestCase):
              unittest.mock.patch.object(ib, "wait_for_abandon", return_value=True), \
              unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
              unittest.mock.patch.object(ib, "redirect_all_players", return_value=0), \
-             unittest.mock.patch.object(ib, "start_lobby_keepalive"), \
              unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
              unittest.mock.patch.object(ib.time, "sleep", return_value=None):
             ib.process = unittest.mock.Mock()
