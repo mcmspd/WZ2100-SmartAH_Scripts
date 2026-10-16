@@ -447,3 +447,23 @@ class MigrateFlowTests(unittest.TestCase):
                                         return_value=True) as ad:
             self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G [new]", "t"))
         ad.assert_called_once_with("G [new]", 2101)
+
+class RateLimitTests(unittest.TestCase):
+    def test_is_rate_limited(self):
+        self.assertTrue(ib.is_rate_limited("lobbyerror (RATE_LIMITED): xyz"))
+        self.assertFalse(ib.is_rate_limited("lobbyerror (GAME_NOT_FOUND): xyz"))
+        self.assertFalse(ib.is_rate_limited(None))
+        self.assertFalse(ib.is_rate_limited(""))
+
+    def test_wait_returns_failed_status(self):
+        with unittest.mock.patch.object(
+                ib, "read_session_status",
+                return_value={"status": "failed", "error": "lobbyerror (RATE_LIMITED): x"}):
+            got = ib.wait_for_new_instance_ready("S", timeout=2)
+        self.assertIsNotNone(got)
+        self.assertEqual(got["status"], "failed")
+        self.assertTrue(ib.is_rate_limited(got["error"]))
+
+    def test_wait_none_on_timeout(self):
+        with unittest.mock.patch.object(ib, "read_session_status", return_value=None):
+            self.assertIsNone(ib.wait_for_new_instance_ready("S", timeout=1))

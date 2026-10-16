@@ -166,10 +166,19 @@ def clear_session_status(session_name: str):
     except Exception:
         pass
 
+RATE_LIMIT_BACKOFF = 1200  # seconds to wait before retrying after lobby rate-limit
+
+
+def is_rate_limited(error: str | None) -> bool:
+    return bool(error) and "RATE_LIMITED" in error
+
+
 def wait_for_new_instance_ready(session_name: str, timeout: float = 60.0) -> dict | None:
     """
     Wait until the new instance reports that it has verified its lobby ID.
-    Returns status dict with 'lobby_id' and 'port' if confirmed, or None on failure/timeout.
+    Returns the status dict when ready, or when it reports failed/exited
+    (callers inspect status/error, e.g. for rate-limit backoff).
+    Returns None only on timeout with no terminal status.
     """
     start_time = time.time()
     while time.time() - start_time < timeout:
@@ -177,12 +186,9 @@ def wait_for_new_instance_ready(session_name: str, timeout: float = 60.0) -> dic
         if status:
             if status.get("status") == "ready" and status.get("lobby_id"):
                 return status
-            if status.get("status") == "failed":
-                log("WARN", f"New instance {session_name} failed: {status.get('error')}")
-                return None
-            if status.get("status") == "exited":
-                log("WARN", f"New instance {session_name} exited unexpectedly.")
-                return None
+            if status.get("status") in ("failed", "exited"):
+                log("WARN", f"New instance {session_name} ended: {status.get('status')}: {status.get('error')}")
+                return status
         time.sleep(0.5)
     log("WARN", f"Timed out waiting for {session_name} to verify lobby ID.")
     return None
@@ -1159,7 +1165,8 @@ def _start_timeout_expired():
                 except Exception:
                     process.kill()
         else:
-            log("WARN", f"Fresh instance {new_session} failed lobby verification. Aborting timeout redirect.")
+            err = status.get("error") if status else "no response from new instance"
+            log("WARN", f"Fresh instance {new_session} failed lobby verification ({err}). Aborting timeout redirect.")
             bcast("Warning: fresh lobby failed to start. Keeping current lobby open.")
             with migration_lock:
                 migration_attempts += 1
@@ -1168,6 +1175,10 @@ def _start_timeout_expired():
                 log("TIMEOUT", "Migration attempts exhausted. Keeping current lobby open; will not retry.")
                 return
             delay = _migration_backoff_delay()
+            if is_rate_limited(err):
+                # The lobby throttles aggressively: extra POSTs only extend the ban.
+                delay = max(delay, RATE_LIMIT_BACKOFF)
+                log("TIMEOUT", "Lobby is rate-limiting us; backing off to avoid extending the ban.")
             with start_timeout_lock:
                 if not game_started and process and process.poll() is None:
                     log("TIMEOUT", f"Retrying migration in {int(delay)}s (attempt {attempts + 1}).")
@@ -1644,8 +1655,12 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
                         migration_attempts = 0
                     send_cmd("shutdown now")
                 else:
-                    log("WARN", f"New instance {new_session} failed lobby verification. Aborting map change redirect.")
-                    bcast(f"Map change failed: new lobby could not be verified. Remaining on {current_map_name or config.get('map_name')}.")
+                    err = status.get("error") if status else "no response from new instance"
+                    log("WARN", f"New instance {new_session} failed lobby verification ({err}). Aborting map change.")
+                    if is_rate_limited(err):
+                        bcast("Map change failed: lobby is rate-limiting us. Wait ~20 minutes before retrying.")
+                    else:
+                        bcast(f"Map change failed: new lobby could not be verified. Remaining on {current_map_name or config.get('map_name')}.")
                     with map_change_lock:
                         map_change_in_progress = False
             except Exception as e:
@@ -2341,6 +2356,16 @@ def main():
                 except Exception:
                     process.kill()
                     process.wait()
+
+            if is_rate_limited(failure_description):
+                # Retrying a POST while throttled only extends the ban: stop
+                # immediately and let the spawner back off instead.
+                lobby_verification_failed = True
+                log(
+                    "ERROR",
+                    "Lobby is rate-limiting us; stopping instance without further retries.",
+                )
+                break
 
             if lobby_id_restarts >= MAX_LOBBY_ID_RESTARTS:
                 lobby_verification_failed = True
