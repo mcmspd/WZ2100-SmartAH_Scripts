@@ -1,0 +1,42 @@
+{
+  "locked": {
+    "power": true,
+    "alliances": true,
+    "teams": true,
+    "difficulty": false,
+    "ai": false,
+    "scavengers": true,
+    "position": false,
+    "bases": true,
+    "readybeforefull": false
+  },
+  "challenge": {
+    "map": "Warwick",
+    "maxPlayers": 5,
+    "scavengers": 0,
+    "alliances": 3,
+    "powerLevel": 2,
+    "bases": 3,
+    "name": "FreeHost",
+    "techLevel": 1,
+    "spectatorHost": true,
+    "openSpectatorSlots": 10,
+    "blindMode": "none"
+  },
+  "player_0": {
+    "team": 0,
+    "ai": "SurvivalMod.js"
+  },
+  "player_1": {
+    "team": 1
+  },
+  "player_2": {
+    "team": 1
+  },
+  "player_3": {
+    "team": 1
+  },
+  "player_4": {
+    "team": 1
+  }
+}

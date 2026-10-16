@@ -14,6 +14,7 @@ This script can be run standalone with no arguments:
 import base64
 import json
 import lobby_mitm
+import wz_config
 import os
 import signal
 import subprocess
@@ -41,6 +42,7 @@ ROOM_STATUS_TIMEOUT = 5  # seconds to wait for a fresh __WZROOMSTATUS__ after re
 MAX_LOBBY_ID_RESTARTS = 3
 MAPS_DIR         = os.path.join(SCRIPT_DIR, "maps")
 MODS_DIR         = os.path.join(SCRIPT_DIR, "mods")
+AUTOHOST_DIR     = os.path.join(SCRIPT_DIR, "autohost")
 MAX_LIVE_SESSIONS = 2   # refuse to spawn when this many WZ_* tmux sessions live
 MIN_UPTIME_TO_RESPAWN = 120  # seconds: only auto-respawn a crashed instance this old
 MAX_RESTARTS_PER_HOUR = 3    # give up respawning after this many restarts in 3600s
@@ -218,6 +220,34 @@ def wait_for_abandon(session_name: str, timeout: float = 150.0) -> bool:
 
 # ─── Dynamic Config & Instances ───────────────────────────────────────────────
 
+def request_roster_refresh(timeout: float = ROOM_STATUS_TIMEOUT) -> bool:
+    """Ask WZ for room status and wait for the roster update. Never call on the reader thread."""
+    roster_updated_event.clear()
+    if not send_cmd("status", log_command=False):
+        return False
+    return roster_updated_event.wait(timeout)
+
+
+def check_lobby_ready() -> bool:
+    """Triple-gate: lobby ID + stdin interface + room in lobby state + local port listening."""
+    if not lobby_id or not stdin_ready or room_state != "lobby":
+        return False
+    try:
+        with socket.create_connection(("localhost", port_global), timeout=2):
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def maybe_signal_ready():
+    """Signal startup completion once all readiness gates pass."""
+    if lobby_id and stdin_ready and room_state == "lobby" and not startup_status_event.is_set():
+        if check_lobby_ready():
+            log("INFO", f"Lobby ready: id={lobby_id} port={port_global}")
+            startup_status_event.set()
+
+
 def find_available_port(start_port: int, exclude_port: int = None) -> int | None:
     """Return a free game port, or None when the whole range is busy."""
     port = start_port
@@ -297,6 +327,25 @@ def prune_stale_status_files(max_age_seconds: float = 86400):
         pass
 
 
+def get_available_maps() -> list[str]:
+    """Configured map list (authoritative); falls back to maps/ dir scan."""
+    configured = config.get("maps")
+    if configured is not None:
+        names = []
+        for entry in configured:
+            if isinstance(entry, dict) and entry.get("name"):
+                names.append(entry["name"])
+            elif isinstance(entry, str):
+                names.append(entry)
+        return names
+    maps = []
+    if os.path.exists(MAPS_DIR):
+        for f in os.listdir(MAPS_DIR):
+            if f.endswith(".wz"):
+                maps.append(f[:-3])
+    return sorted(maps)
+
+
 RESTARTS_FILE = os.path.join(SCRIPT_DIR, "instance_configs", "restarts.json")
 
 def _load_restart_times() -> list:
@@ -330,350 +379,7 @@ def record_restart_and_check_cap() -> bool:
         return True
 
 
-SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.@-]+$")
 
-def is_safe_mod_name(name: str) -> bool:
-    """Reject path traversal / shell metacharacters in mod names."""
-    return bool(name) and bool(SAFE_NAME_RE.fullmatch(name)) and "/" not in name and name not in (".", "..")
-
-
-def get_autostart_players(map_name: str) -> int:
-    """Minimum humans to auto-start (`--startplayers`). Explicit
-    `autostart_players` wins; survival maps default to 2, else off (0)."""
-    entry = None
-    for e in config.get("maps", []) or []:
-        if isinstance(e, dict) and e.get("name") == map_name:
-            entry = e
-            break
-    if entry and isinstance(entry.get("autostart_players"), int):
-        return max(0, entry["autostart_players"])
-    survival, _ = is_survival_map(map_name, (entry.get("mods", []) if entry else []))
-    return 2 if survival else 0
-
-
-def get_map_entry(map_name: str) -> dict | None:
-    """Look up a configured map entry {name, file, mods, survival, ...}."""
-    for entry in config.get("maps", []) or []:
-        if isinstance(entry, dict) and entry.get("name") == map_name:
-            mods = entry.get("mods", [])
-            mods = list(mods) if isinstance(mods, list) else []
-            filename = entry.get("file") or f"{map_name}.wz"
-            return {"name": map_name, "file": filename, "mods": mods,
-                    "survival": bool(entry.get("survival", False)),
-                    "survival_ai_js": entry.get("survival_ai_js", "SurvivalMod.js")}
-    return None
-
-
-def is_survival_map(map_name: str, mods: list) -> tuple[bool, str]:
-    """Survival layout if flagged or the Survival mod is loaded.
-
-    Returns (survival, ai_js).
-    """
-    entry = get_map_entry(map_name)
-    if entry and entry.get("survival"):
-        return True, entry.get("survival_ai_js", "SurvivalMod.js")
-    if "Survival_Mod" in (mods or []):
-        ai_js = entry.get("survival_ai_js", "SurvivalMod.js") if entry else "SurvivalMod.js"
-        return True, ai_js
-    return False, ""
-
-
-def resolve_map_file(map_name: str) -> str:
-    """Archive filename for a map (explicit `file` field or `<name>.wz`)."""
-    entry = get_map_entry(map_name)
-    if entry:
-        return entry["file"]
-    return f"{map_name}.wz"
-
-
-def resolve_mod_source(mod: str) -> tuple[str, str] | None:
-    """Locate a mod as (kind, path): kind is 'file' (<mod>.wz) or 'dir' (<mod>/)."""
-    wz_path = os.path.join(MODS_DIR, f"{mod}.wz")
-    if os.path.isfile(wz_path):
-        return ("file", wz_path)
-    dir_path = os.path.join(MODS_DIR, mod)
-    if os.path.isdir(dir_path):
-        return ("dir", dir_path)
-    return None
-
-
-def get_available_maps() -> list[str]:
-    """Configured map list (authoritative); falls back to maps/ dir scan."""
-    configured = config.get("maps")
-    if configured is not None:
-        names = []
-        for entry in configured:
-            if isinstance(entry, dict) and entry.get("name"):
-                names.append(entry["name"])
-            elif isinstance(entry, str):
-                names.append(entry)
-        return names
-    maps = []
-    if os.path.exists(MAPS_DIR):
-        for f in os.listdir(MAPS_DIR):
-            if f.endswith(".wz"):
-                maps.append(f[:-3])
-    return sorted(maps)
-
-
-def validate_config() -> list[str]:
-    """Check maps/mods referenced by config exist on disk. Returns error list."""
-    errors = []
-    if "maps" in config:
-        for entry in config.get("maps") or []:
-            name = entry.get("name") if isinstance(entry, dict) else entry
-            mods = entry.get("mods", []) if isinstance(entry, dict) else []
-            if not name:
-                errors.append("maps entry without a name")
-                continue
-            filename = entry.get("file", f"{name}.wz") if isinstance(entry, dict) else f"{name}.wz"
-            if "/" in filename or not os.path.exists(os.path.join(MAPS_DIR, filename)):
-                errors.append(f"map missing on disk: {filename}")
-            for mod in mods or []:
-                if not is_safe_mod_name(mod):
-                    errors.append(f"unsafe mod name for map {name}: {mod!r}")
-                elif resolve_mod_source(mod) is None:
-                    errors.append(f"mod missing on disk for map {name}: {mod} (.wz or /)")
-    default_map = config.get("map_name")
-    if default_map and "maps" in config and get_map_entry(default_map) is None:
-        errors.append(f"default map_name {default_map!r} not present in maps list")
-    return errors
-
-
-def request_roster_refresh(timeout: float = ROOM_STATUS_TIMEOUT) -> bool:
-    """Ask WZ for room status and wait for the roster update. Never call on the reader thread."""
-    roster_updated_event.clear()
-    if not send_cmd("status", log_command=False):
-        return False
-    return roster_updated_event.wait(timeout)
-
-
-def check_lobby_ready() -> bool:
-    """Triple-gate: lobby ID + stdin interface + room in lobby state + local port listening."""
-    if not lobby_id or not stdin_ready or room_state != "lobby":
-        return False
-    try:
-        with socket.create_connection(("localhost", port_global), timeout=2):
-            pass
-        return True
-    except Exception:
-        return False
-
-
-def maybe_signal_ready():
-    """Signal startup completion once all readiness gates pass."""
-    if lobby_id and stdin_ready and room_state == "lobby" and not startup_status_event.is_set():
-        if check_lobby_ready():
-            log("INFO", f"Lobby ready: id={lobby_id} port={port_global}")
-            startup_status_event.set()
-
-def extract_map_info(map_name: str, map_file: str | None = None) -> dict | None:
-    """Read player count from a map archive (new level.json or old .lev format)."""
-    filename = map_file or f"{map_name}.wz"
-    wz_path = os.path.join(MAPS_DIR, filename)
-    if not os.path.exists(wz_path):
-        return None
-    try:
-        with zipfile.ZipFile(wz_path, 'r') as z:
-            names = z.namelist()
-            if 'level.json' in names:
-                with z.open('level.json') as f:
-                    level_data = json.load(f)
-                    return {
-                        "name": map_name,
-                        "players": level_data.get("players", 2)
-                    }
-            # Old format: parse "players N" from each .lev file, take the max.
-            best = 0
-            for n in names:
-                if n.endswith('.lev'):
-                    with z.open(n) as f:
-                        text = f.read().decode("utf-8", errors="replace")
-                    for m in re.finditer(r"^\s*players\s+(\d+)", text, re.MULTILINE):
-                        best = max(best, int(m.group(1)))
-            if best > 0:
-                return {"name": map_name, "players": best}
-            log("WARN", f"No player count found in {filename}")
-            return None
-    except Exception as e:
-        log("WARN", f"Failed to extract map info: {e}")
-        return None
-
-def zip_mod_dir(source_dir: str, target_wz: str):
-    """Package a mod directory into a deterministic .wz (stable hash)."""
-    with zipfile.ZipFile(target_wz, "w", zipfile.ZIP_DEFLATED) as z:
-        for root, dirs, files in os.walk(source_dir):
-            dirs.sort()
-            for fname in sorted(files):
-                full = os.path.join(root, fname)
-                arc = os.path.relpath(full, source_dir)
-                info = zipfile.ZipInfo(arc, date_time=(2020, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                with open(full, "rb") as f:
-                    z.writestr(info, f.read())
-
-
-def stage_mods(configdir: str, staged: list) -> bool:
-    """Copy/file or zip/dir staged mods into versioned + unversioned multiplay dirs.
-
-    WZ resolves `--mod_mp` names as regular files under the *versioned*
-    `mods/<tag>/multiplay` dir (see upstream main.cpp mod check), so each mod
-    lands as `<mod>.wz` in both versioned and unversioned locations.
-    Directories are zipped deterministically (stable hash across spawns).
-    `staged` items are (mod, kind, source) with kind in {"file", "dir"}.
-    """
-    tag = str(config.get("wz_mods_version", "4.7.0") or "4.7.0")
-    target_dirs = [
-        os.path.join(configdir, "mods", tag, "multiplay"),
-        os.path.join(configdir, "mods", "multiplay"),
-    ]
-    for target_mods_dir in target_dirs:
-        os.makedirs(target_mods_dir, exist_ok=True)
-        for mod, kind, source in staged:
-            target = os.path.join(target_mods_dir, f"{mod}.wz")
-            try:
-                if kind == "file":
-                    shutil.copy2(source, target)
-                else:
-                    if os.path.exists(target):
-                        os.remove(target)
-                    zip_mod_dir(source, target)
-            except Exception as e:
-                log("WARN", f"Failed to stage mod {mod}: {e}")
-                return False
-    return True
-
-
-def generate_configs(
-    map_name: str,
-    configdir: str,
-    host_name: str,
-    game_name: str,
-    desync_kick_seconds: int = 30,
-    lag_kick_seconds: int = 30,
-    not_ready_kick_seconds: int = 30,
-    game_password: str = "",
-    host_key: str = "",
-    mods: list | None = None,
-):
-    entry = get_map_entry(map_name)
-    map_file = (entry["file"] if entry and entry.get("file")
-                else f"{map_name}.wz")
-    info = extract_map_info(map_name, map_file)
-    if not info:
-        return False
-    mods = list(mods or [])
-    staged = []
-    for mod in mods:
-        if not is_safe_mod_name(mod):
-            log("WARN", f"Refusing to stage unsafe mod name: {mod!r}")
-            return False
-        found = resolve_mod_source(mod)
-        if found is None:
-            log("WARN", f"Mod missing on disk, aborting config generation: {mod}")
-            return False
-        staged.append((mod,) + found)
-
-    players = info["players"]
-    
-    # Generate config
-    os.makedirs(configdir, exist_ok=True)
-    config_path = os.path.join(configdir, "config")
-    with open(config_path, "w") as f:
-        f.write(f"[General]\nmapName={map_name}\nmaxPlayers={players}\ngameName={game_name}\n")
-        f.write("lobbyserver=https://wzlobby.wz2100.net/lobby\n")
-        f.write(f"playerName={host_name}\n")
-        f.write("antialiasing=0\n")
-        f.write("fog=false\n")
-        f.write(f"hostAutoDesyncKickSeconds={desync_kick_seconds}\n")
-        f.write(f"hostAutoLagKickSeconds={lag_kick_seconds}\n")
-        f.write(f"hostAutoNotReadyKickSeconds={not_ready_kick_seconds}\n")
-        f.write("lobbyHostJoinOpts_botProt=2\n")
-        f.write("lobbyHostJoinOpts_proxyIPs=2\n")
-        f.write("lobbyHostJoinOpts_hostingIPs=2\n")
-        f.write("rotateRadar=false\n")
-        f.write("shadows=0\n")
-        f.write("sound=0\n")
-        f.write("terrainShadows=1\n")
-        f.write("vsync=1\n")
-        
-    # Generate autohost config
-    ah_dir = os.path.join(configdir, "autohost")
-    os.makedirs(ah_dir, exist_ok=True)
-    ah_name = f"AH_{map_name}"
-    ah_path = os.path.join(ah_dir, ah_name)
-    
-    challenge = {
-        "map": map_name,
-        "maxPlayers": players,
-        "scavengers": 0,
-        "alliances": 3,
-        "powerLevel": 2,
-        "bases": 3,
-        "name": game_name,
-        "techLevel": 1,
-        "spectatorHost": True,
-        "openSpectatorSlots": 10,
-        "blindMode": "none",
-    }
-    if game_password:
-        challenge["gamePassword"] = game_password
-
-    ah_data = {
-        "locked": {"power": True, "alliances": True, "teams": True, "difficulty": False, "ai": False, "scavengers": True, "position": False, "bases": True},
-        "challenge": challenge,
-    }
-    survival, survival_ai_js = is_survival_map(map_name, mods)
-    if survival:
-        # Survival lobbies must be startable (and auto-startable) with open
-        # slots: stock autohost locks ready-behind-full, which would force a
-        # full house before anyone can even check Ready.
-        ah_data["locked"]["readybeforefull"] = False
-
-    # Generate teams. Survival maps: slot 0 is Team A, occupied by the
-    # Survival AI; every other slot is open Team B for humans. All other
-    # maps keep the default 2-team split with no preassigned AI.
-    if survival:
-        log("INFO", f"Survival layout for {map_name}: slot 0 = Team A AI ({survival_ai_js}), "
-                    f"slots 1-{players - 1} = open Team B")
-        ah_data["player_0"] = {"team": 0, "ai": survival_ai_js}
-        for i in range(1, players):
-            ah_data[f"player_{i}"] = {"team": 1}
-    else:
-        for i in range(players):
-            team = i // max(1, (players // 2))
-            ah_data[f"player_{i}"] = {"team": team}
-        
-    with open(ah_path, "w") as f:
-        json.dump(ah_data, f, indent=2)
-        
-    # Generate players dir and host sta2 identity if provided
-    players_dir = os.path.join(configdir, "multiplay", "players")
-    os.makedirs(players_dir, exist_ok=True)
-    if host_key and host_name:
-        sta2_path = os.path.join(players_dir, f"{host_name}.sta2")
-        with open(sta2_path, "w", encoding="utf-8") as f:
-            f.write(f"WZ.STA.v3\n0 0 0 0 0\n{host_key.strip()}\n")
-        
-    # Copy map file into config maps directory (keep its real filename:
-    # hash-named downloads will not match <name>.wz)
-    target_maps_dir = os.path.join(configdir, "maps")
-    os.makedirs(target_maps_dir, exist_ok=True)
-    source_map_path = os.path.join(MAPS_DIR, map_file)
-    target_map_path = os.path.join(target_maps_dir, map_file)
-    if os.path.exists(source_map_path):
-        shutil.copy2(source_map_path, target_map_path)
-    else:
-        log("WARN", f"Map file missing, aborting config generation: {map_file}")
-        return False
-
-    # Stage per-map mods (versioned + unversioned multiplay dirs).
-    if staged:
-        if not stage_mods(configdir, staged):
-            return False
-        log("INFO", f"Staged {len(staged)} mod(s) for map {map_name}: {', '.join(mods)}")
-
-    return ah_name
 
 def spawn_new_instance(map_name: str, mods: list | None = None,
                         name_suffix: str = "") -> tuple[int, str] | None:
@@ -1707,7 +1413,7 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
             if sender_pk:
                 dm(sender_pk, "Available maps:")
                 for i, m in enumerate(maps):
-                    entry = get_map_entry(m)
+                    entry = wz_config.get_map_entry(config.get("maps"), m)
                     mods = entry["mods"] if entry else []
                     suffix = f" [+{len(mods)} mods: {', '.join(mods)}]" if mods else ""
                     dm(sender_pk, f"{i+1}. {m}{suffix}")
@@ -1747,7 +1453,7 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
                 map_change_in_progress = False
             return
 
-        entry = get_map_entry(new_map)
+        entry = wz_config.get_map_entry(config.get("maps"), new_map)
         new_mods = list(entry["mods"]) if entry else []
         mod_note = f" (+{len(new_mods)} mods: {', '.join(new_mods)})" if new_mods else ""
         successor_name = config.get("game_name", "") + config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX)
@@ -2244,18 +1950,19 @@ def build_command(wz_install: str) -> list:
     host_name = config.get("host_name")
     game_name = config.get("game_name")
     host_key = config.get("host_key") or config.get("host_sta2_key") or config.get("sta2_key") or ""
-    mods = [m for m in current_map_mods if is_safe_mod_name(m)]
-    ah_config_name = generate_configs(
-        map_name,
-        configdir,
-        host_name,
-        game_name,
+    mods = [m for m in current_map_mods if wz_config.is_safe_mod_name(m)]
+    ah_config_name = wz_config.generate_configs(
+        MAPS_DIR, MODS_DIR, AUTOHOST_DIR,
+        map_name, config.get("maps"), configdir,
+        host_name, game_name,
         config.get("host_auto_desync_kick_seconds", 30),
         config.get("host_auto_lag_kick_seconds", 30),
         config.get("host_auto_not_ready_kick_seconds", 30),
         config.get("game_password", ""),
         host_key,
-        mods,
+        mods=mods,
+        mods_version=config.get("wz_mods_version", "4.7.0"),
+        log=log,
     )
     if not ah_config_name:
         ah_config_name = f"AH_{map_name}"
@@ -2288,7 +1995,7 @@ def build_command(wz_install: str) -> list:
         common_args.append("--portmapping=false")
     if config.get("wz_async_join_approve", True):
         common_args.append("--async-join-approve")
-    autostart = get_autostart_players(current_map_name)
+    autostart = wz_config.get_autostart_players(config.get("maps"), current_map_name, current_map_mods)
     if autostart > 0:
         common_args.append(f"--startplayers={autostart}")
     if config.get("wz_enable_lobby_slashcmd", False):
@@ -2372,18 +2079,18 @@ def main():
         config["game_name"] = config.get("game_name", "") + sys.argv[5]
         log("INFO", f"Display name    : {config['game_name']}")
     current_map_name = config.get("map_name", "")
-    entry = get_map_entry(current_map_name)
+    entry = wz_config.get_map_entry(config.get("maps"), current_map_name)
     current_map_mods = list(spawn_mods) if spawn_mods else (list(entry["mods"]) if entry else [])
 
-    for problem in validate_config():
+    for problem in wz_config.validate_config(config.get("maps"), MAPS_DIR, MODS_DIR, config.get("map_name")):
         log("WARN", f"Config validation: {problem}")
 
-    if not extract_map_info(current_map_name, resolve_map_file(current_map_name)):
+    if not wz_config.extract_map_info(MAPS_DIR, current_map_name, wz_config.resolve_map_file(config.get("maps"), current_map_name), log):
         log("ERROR", f"Map not available, refusing to start: {current_map_name}")
         write_session_status(session_global, "failed", port_global, error=f"unknown map {current_map_name}")
         sys.exit(1)
     for mod in current_map_mods:
-        if not is_safe_mod_name(mod) or resolve_mod_source(mod) is None:
+        if not wz_config.is_safe_mod_name(mod) or wz_config.resolve_mod_source(MODS_DIR, mod) is None:
             log("ERROR", f"Mod not available, refusing to start: {mod}")
             write_session_status(session_global, "failed", port_global, error=f"unknown mod {mod}")
             sys.exit(1)

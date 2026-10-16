@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import instance_bot as ib
+import wz_config as wz
 
 
 class CommandValidationTests(unittest.TestCase):
@@ -45,12 +46,12 @@ class CommandValidationTests(unittest.TestCase):
 
 class MapInfoTests(unittest.TestCase):
     def test_known_map(self):
-        info = ib.extract_map_info("NTW_3v3Full")
+        info = wz.extract_map_info(wz.DEFAULT_MAPS_DIR, "NTW_3v3Full")
         self.assertIsNotNone(info)
         self.assertGreater(info["players"], 0)
 
     def test_unknown_map(self):
-        self.assertIsNone(ib.extract_map_info("No_Such_Map_xyz"))
+        self.assertIsNone(wz.extract_map_info(wz.DEFAULT_MAPS_DIR, "No_Such_Map_xyz"))
 
 
 class PortTests(unittest.TestCase):
@@ -79,17 +80,18 @@ class ConfigMapTests(unittest.TestCase):
         ib.config = self._old
 
     def test_configured_list_is_authoritative(self):
-        ib.config = {"maps": [{"name": "A", "mods": ["m1"]}, "B"]}
+        entries = [{"name": "A", "mods": ["m1"]}, "B"]
+        ib.config = {"maps": entries}
         self.assertEqual(ib.get_available_maps(), ["A", "B"])
-        self.assertEqual(ib.get_map_entry("A"),
+        self.assertEqual(wz.get_map_entry(entries, "A"),
                          {"name": "A", "file": "A.wz", "mods": ["m1"],
                           "survival": False, "survival_ai_js": "SurvivalMod.js"})
-        self.assertIsNone(ib.get_map_entry("ZZZ"))
+        self.assertIsNone(wz.get_map_entry(entries, "ZZZ"))
 
     def test_map_file_field(self):
-        ib.config = {"maps": [{"name": "W", "file": "5c-W.wz", "mods": []}]}
-        self.assertEqual(ib.resolve_map_file("W"), "5c-W.wz")
-        self.assertEqual(ib.resolve_map_file("Other"), "Other.wz")
+        entries = [{"name": "W", "file": "5c-W.wz", "mods": []}]
+        self.assertEqual(wz.resolve_map_file(entries, "W"), "5c-W.wz")
+        self.assertEqual(wz.resolve_map_file(entries, "Other"), "Other.wz")
 
     def test_dir_fallback_without_key(self):
         ib.config = {}
@@ -97,16 +99,16 @@ class ConfigMapTests(unittest.TestCase):
         self.assertIn("NTW_3v3Full", maps)
 
     def test_validate_missing_map_and_mod(self):
-        ib.config = {"map_name": "Ghost", "maps": [{"name": "Ghost", "mods": ["nope"]}],
-                     "authorized_pkeys": []}
-        errors = ib.validate_config()
+        entries = [{"name": "Ghost", "mods": ["nope"]}]
+        errors = wz.validate_config(entries, wz.DEFAULT_MAPS_DIR,
+                                    wz.DEFAULT_MODS_DIR, "Ghost")
         self.assertTrue(any("Ghost.wz" in e for e in errors))
         self.assertTrue(any("nope" in e and "mod" in e for e in errors))
 
     def test_mod_name_safety(self):
-        self.assertTrue(ib.is_safe_mod_name("Cool-Mod_v2.wz".replace(".wz", "")))
+        self.assertTrue(wz.is_safe_mod_name("Cool-Mod_v2.wz".replace(".wz", "")))
         for bad in ["../evil", "a/b", "", ".", "..", "x;y", "x y"]:
-            self.assertFalse(ib.is_safe_mod_name(bad), bad)
+            self.assertFalse(wz.is_safe_mod_name(bad), bad)
 
 
 class VoteTests(unittest.TestCase):
@@ -314,7 +316,7 @@ class BuildCommandTests(unittest.TestCase):
         ib.port_global = 2110
         ib.session_global = "S"
         ib.current_map_mods = []
-        with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_M"):
+        with unittest.mock.patch.object(wz, "generate_configs", return_value="AH_M"):
             cmd = ib.build_command("system")
         self.assertEqual(cmd[0], "/usr/games/warzone2100.real")
         self.assertIn("--gameport=2110", cmd)
@@ -324,7 +326,7 @@ class BuildCommandTests(unittest.TestCase):
         ib.port_global = 2110
         ib.session_global = "S"
         ib.current_map_mods = ["modA", "modB"]
-        with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_M"):
+        with unittest.mock.patch.object(wz, "generate_configs", return_value="AH_M"):
             cmd = ib.build_command("system")
         self.assertIn("--mod_mp=modA.wz", cmd)
         self.assertIn("--mod_mp=modB.wz", cmd)
@@ -334,7 +336,7 @@ class BuildCommandTests(unittest.TestCase):
         ib.port_global = 2110
         ib.session_global = "S"
         ib.current_map_mods = []
-        with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_M"):
+        with unittest.mock.patch.object(wz, "generate_configs", return_value="AH_M"):
             cmd = ib.build_command("system")
         self.assertIn("--async-join-approve", cmd)
 
@@ -572,13 +574,10 @@ class MigrateMessagesTests(unittest.TestCase):
 
 class ModSourceTests(unittest.TestCase):
     def setUp(self):
-        import tempfile, shutil
-        self._old_mods = ib.MODS_DIR
+        import tempfile
         self.tmp = tempfile.mkdtemp()
-        ib.MODS_DIR = self.tmp
 
     def tearDown(self):
-        ib.MODS_DIR = self._old_mods
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -586,9 +585,9 @@ class ModSourceTests(unittest.TestCase):
         import os
         open(os.path.join(self.tmp, "M.wz"), "w").write("x")
         os.makedirs(os.path.join(self.tmp, "D", "sub"))
-        self.assertEqual(ib.resolve_mod_source("M")[0], "file")
-        self.assertEqual(ib.resolve_mod_source("D")[0], "dir")
-        self.assertIsNone(ib.resolve_mod_source("Nope"))
+        self.assertEqual(wz.resolve_mod_source(self.tmp, "M")[0], "file")
+        self.assertEqual(wz.resolve_mod_source(self.tmp, "D")[0], "dir")
+        self.assertIsNone(wz.resolve_mod_source(self.tmp, "Nope"))
 
     def test_old_format_lev_players(self):
         import os
@@ -596,36 +595,28 @@ class ModSourceTests(unittest.TestCase):
         zpath = os.path.join(self.tmp, "Old.wz")
         with zipfile.ZipFile(zpath, "w") as z:
             z.writestr("x.lev", "level Foo\nplayers 5\ntype 14\n")
-        ib.MODS_DIR = self.tmp  # noqa (maps test below overrides MAPS_DIR)
-        old_maps = ib.MAPS_DIR
-        ib.MAPS_DIR = self.tmp
-        try:
-            info = ib.extract_map_info("Old")
-            self.assertEqual(info["players"], 5)
-        finally:
-            ib.MAPS_DIR = old_maps
+        info = wz.extract_map_info(self.tmp, "Old")
+        self.assertEqual(info["players"], 5)
+
 
 class StageModsTests(unittest.TestCase):
     def setUp(self):
         import tempfile
-        self._old = (ib.config, ib.MODS_DIR)
         self.tmp = tempfile.mkdtemp()
         self.src = os.path.join(self.tmp, "src")
         os.makedirs(os.path.join(self.src, "D", "sub"))
         open(os.path.join(self.src, "D", "f.txt"), "w").write("x")
         open(os.path.join(self.src, "D", "sub", "g.txt"), "w").write("y")
-        ib.MODS_DIR = self.src
-        ib.config = {"wz_mods_version": "9.9"}
 
     def tearDown(self):
-        ib.config, ib.MODS_DIR = self._old[0], self._old[1]
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_zip_is_deterministic(self):
         out = os.path.join(self.tmp, "out")
-        self.assertTrue(ib.stage_mods(out, [("D", "dir",
-                                            os.path.join(self.src, "D"))]))
+        self.assertTrue(wz.stage_mods(
+            self.src, out, [("D", "dir", os.path.join(self.src, "D"))],
+            "9.9", log=lambda t, m: None))
         p1 = os.path.join(out, "mods", "9.9", "multiplay", "D.wz")
         p2 = os.path.join(out, "mods", "multiplay", "D.wz")
         self.assertTrue(os.path.exists(p1))
@@ -637,67 +628,65 @@ class StageModsTests(unittest.TestCase):
         names = zipfile.ZipFile(p1).namelist()
         self.assertEqual(names, sorted(names))
 
+
 class SurvivalTests(unittest.TestCase):
+    ENTRIES = [{"name": "S", "mods": ["Survival_Mod"]},
+               {"name": "N", "mods": []}]
+
     def setUp(self):
-        self._old = (ib.config, ib.MAPS_DIR)
-        ib.config = {"maps": [{"name": "S", "mods": ["Survival_Mod"]},
-                              {"name": "N", "mods": []}]}
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.ahdir = os.path.join(self.tmp, "ah")
+        self.maps = os.path.join(self.tmp, "maps")
+        os.makedirs(self.maps)
+        self.mods = os.path.join(self.tmp, "mods")
+        os.makedirs(os.path.join(self.mods, "Survival_Mod", "stats"))
 
     def tearDown(self):
-        ib.config = self._old[0]
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _gen(self, name, mods):
+        import zipfile, json as _json
+        players = 5 if name == "S" else 4
+        with zipfile.ZipFile(os.path.join(self.maps, f"{name}.wz"), "w") as z:
+            z.writestr("level.json", _json.dumps({"players": players}))
+        cfg = os.path.join(self.tmp, "cfg-" + name)
+        return wz.generate_configs(
+            self.maps, self.mods, self.ahdir, name, self.ENTRIES, cfg,
+            "H", "G", 30, 30, 30, "", "", mods=mods, log=lambda t, m: None)
 
     def test_survival_detection(self):
-        self.assertEqual(ib.is_survival_map("S", ["Survival_Mod"])[0], True)
-        self.assertEqual(ib.is_survival_map("N", [])[0], False)
-        ib.config = {"maps": [{"name": "S2", "mods": [], "survival": True,
-                               "survival_ai_js": "X.js"}]}
-        self.assertEqual(ib.is_survival_map("S2", []), (True, "X.js"))
+        self.assertEqual(wz.is_survival_map(self.ENTRIES, "S", ["Survival_Mod"])[0], True)
+        self.assertEqual(wz.is_survival_map(self.ENTRIES, "N", [])[0], False)
+        entries = [{"name": "S2", "mods": [], "survival": True, "survival_ai_js": "X.js"}]
+        self.assertEqual(wz.is_survival_map(entries, "S2", []), (True, "X.js"))
 
     def test_survival_layout(self):
-        import tempfile, shutil, zipfile, json as _json, os
-        tmp = tempfile.mkdtemp()
-        old_maps = ib.MAPS_DIR
-        ib.MAPS_DIR = tmp
-        try:
-            zpath = os.path.join(tmp, "S.wz")
-            with zipfile.ZipFile(zpath, "w") as z:
-                z.writestr("level.json", _json.dumps({"players": 5}))
-            cfg = os.path.join(tmp, "cfg")
-            ah = ib.generate_configs("S", cfg, "H", "G", 30, 30, 30, "", "",
-                                     ["Survival_Mod"])
-            self.assertTrue(ah)
-            data = _json.load(open(os.path.join(cfg, "autohost", ah)))
-            self.assertEqual(data["player_0"], {"team": 0, "ai": "SurvivalMod.js"})
-            for i in range(1, 5):
-                self.assertEqual(data[f"player_{i}"], {"team": 1})
-        finally:
-            ib.MAPS_DIR = old_maps
-            shutil.rmtree(tmp, ignore_errors=True)
+        import json as _json
+        ah = self._gen("S", ["Survival_Mod"])
+        self.assertTrue(ah)
+        data = _json.load(open(os.path.join(self.tmp, "cfg-S", "autohost", ah)))
+        self.assertEqual(data["player_0"], {"team": 0, "ai": "SurvivalMod.js"})
+        for i in range(1, 5):
+            self.assertEqual(data[f"player_{i}"], {"team": 1})
 
     def test_normal_layout_untouched(self):
-        import tempfile, shutil, zipfile, json as _json, os
-        tmp = tempfile.mkdtemp()
-        old_maps = ib.MAPS_DIR
-        ib.MAPS_DIR = tmp
-        try:
-            zpath = os.path.join(tmp, "N.wz")
-            with zipfile.ZipFile(zpath, "w") as z:
-                z.writestr("level.json", _json.dumps({"players": 4}))
-            cfg = os.path.join(tmp, "cfg")
-            ah = ib.generate_configs("N", cfg, "H", "G", 30, 30, 30, "", "", [])
-            data = _json.load(open(os.path.join(cfg, "autohost", ah)))
-            self.assertNotIn("ai", data["player_0"])
-        finally:
-            ib.MAPS_DIR = old_maps
-            shutil.rmtree(tmp, ignore_errors=True)
+        import json as _json
+        ah = self._gen("N", [])
+        data = _json.load(open(os.path.join(self.tmp, "cfg-N", "autohost", ah)))
+        self.assertNotIn("ai", data["player_0"])
+
 
 class AutostartTests(unittest.TestCase):
+    ENTRIES = [{"name": "S", "mods": ["Survival_Mod"]},
+               {"name": "N", "mods": []},
+               {"name": "C", "mods": [], "autostart_players": 4}]
+
     def setUp(self):
         self._old = (ib.config, ib.port_global, ib.session_global,
                      ib.current_map_name, ib.current_map_mods)
-        ib.config = {"maps": [{"name": "S", "mods": ["Survival_Mod"]},
-                              {"name": "N", "mods": []},
-                              {"name": "C", "mods": [], "autostart_players": 4}]}
+        ib.config = {"maps": self.ENTRIES}
         ib.port_global = 2110
         ib.session_global = "S"
 
@@ -706,37 +695,97 @@ class AutostartTests(unittest.TestCase):
          ib.current_map_name, ib.current_map_mods) = self._old
 
     def test_defaults(self):
-        self.assertEqual(ib.get_autostart_players("S"), 2)
-        self.assertEqual(ib.get_autostart_players("N"), 0)
-        self.assertEqual(ib.get_autostart_players("C"), 4)
-        self.assertEqual(ib.get_autostart_players("???"), 0)
+        self.assertEqual(wz.get_autostart_players(self.ENTRIES, "S", ["Survival_Mod"]), 2)
+        self.assertEqual(wz.get_autostart_players(self.ENTRIES, "N", []), 0)
+        self.assertEqual(wz.get_autostart_players(self.ENTRIES, "C", []), 4)
+        self.assertEqual(wz.get_autostart_players(self.ENTRIES, "???", []), 0)
 
     def test_flag_present_only_when_on(self):
-        ib.current_map_mods = []
-        with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_X"):
+        with unittest.mock.patch.object(wz, "generate_configs", return_value="AH_X"):
             ib.current_map_name = "S"
+            ib.current_map_mods = ["Survival_Mod"]
             self.assertIn("--startplayers=2", ib.build_command("system"))
             ib.current_map_name = "N"
+            ib.current_map_mods = []
             self.assertNotIn("--startplayers=2", ib.build_command("system"))
 
     def test_readybeforefull_only_for_survival(self):
         import tempfile, shutil, zipfile, json as _json, os
         tmp = tempfile.mkdtemp()
-        old_maps = ib.MAPS_DIR
-        ib.MAPS_DIR = tmp
         try:
             for name in ("S", "N"):
                 with zipfile.ZipFile(os.path.join(tmp, f"{name}.wz"), "w") as z:
                     z.writestr("level.json", _json.dumps({"players": 4}))
+            os.makedirs(os.path.join(tmp, "Survival_Mod", "stats"))
             cfg = os.path.join(tmp, "cfg")
-            ah = ib.generate_configs("S", cfg, "H", "G", 30, 30, 30, "", "",
-                                     ["Survival_Mod"])
+            ah = wz.generate_configs(
+                tmp, tmp, os.path.join(tmp, "ah"), "S", self.ENTRIES, cfg,
+                "H", "G", 30, 30, 30, "", "", mods=["Survival_Mod"],
+                log=lambda t, m: None)
             data = _json.load(open(os.path.join(cfg, "autohost", ah)))
             self.assertEqual(data["locked"].get("readybeforefull"), False)
             cfg2 = os.path.join(tmp, "cfg2")
-            ah2 = ib.generate_configs("N", cfg2, "H", "G", 30, 30, 30, "", "", [])
+            ah2 = wz.generate_configs(
+                tmp, tmp, os.path.join(tmp, "ah"), "N", self.ENTRIES, cfg2,
+                "H", "G", 30, 30, 30, "", "", mods=[],
+                log=lambda t, m: None)
             data2 = _json.load(open(os.path.join(cfg2, "autohost", ah2)))
             self.assertNotIn("readybeforefull", data2["locked"])
         finally:
-            ib.MAPS_DIR = old_maps
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TemplateTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.maps = os.path.join(self.tmp, "maps")
+        os.makedirs(self.maps)
+        self.ahdir = os.path.join(self.tmp, "ah")
+        self.entries = [{"name": "T", "mods": []}]
+        import zipfile, json as _json
+        with zipfile.ZipFile(os.path.join(self.maps, "T.wz"), "w") as z:
+            z.writestr("level.json", _json.dumps({"players": 2}))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _gen(self, **kw):
+        cfg = os.path.join(self.tmp, "cfg")
+        return wz.generate_configs(
+            self.maps, self.tmp, self.ahdir, "T", self.entries, cfg,
+            "H", kw.get("game_name", "G"), 30, 30, 30,
+            kw.get("game_password", ""), "", mods=[],
+            log=lambda t, m: None), cfg
+
+    def test_custom_template_respected(self):
+        import json as _json, os
+        os.makedirs(self.ahdir, exist_ok=True)
+        with open(os.path.join(self.ahdir, "T.json"), "w") as f:
+            _json.dump({"locked": {"power": False},
+                        "challenge": {"alliances": 1, "name": "Old"},
+                        "player_0": {"team": 5}}, f)
+        ah, cfg = self._gen(game_name="GameX", game_password="pw")
+        data = _json.load(open(os.path.join(cfg, "autohost", ah)))
+        self.assertFalse(data["locked"]["power"])
+        self.assertEqual(data["challenge"]["alliances"], 1)
+        self.assertEqual(data["player_0"], {"team": 5})
+        # identity always patched in:
+        self.assertEqual(data["challenge"]["name"], "GameX")
+        self.assertEqual(data["challenge"]["map"], "T")
+        self.assertEqual(data["challenge"]["gamePassword"], "pw")
+
+    def test_missing_template_generates_and_persists(self):
+        import json as _json, os
+        ah, cfg = self._gen()
+        self.assertTrue(ah)
+        self.assertTrue(os.path.exists(os.path.join(self.ahdir, "T.json")))
+
+    def test_invalid_template_falls_back(self):
+        import os
+        os.makedirs(self.ahdir, exist_ok=True)
+        with open(os.path.join(self.ahdir, "T.json"), "w") as f:
+            f.write("{not json")
+        ah, cfg = self._gen()
+        self.assertTrue(ah)
