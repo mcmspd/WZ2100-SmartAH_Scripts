@@ -1154,15 +1154,40 @@ def maybe_spawn_crash_replacement(reason: str = "crashed") -> None:
                        list(current_map_mods))
 
 
+def successor_covering(session_name: str | None) -> bool:
+    """True when the tracked successor is starting or live.
+
+    Covers the race where the parent dies while the successor is still
+    verifying (no listing yet): a starting successor with a live tmux
+    session will be listed within a minute, so no replacement is needed.
+    Dead tmux or failed/exited status means no coverage.
+    """
+    if not session_name:
+        return False
+    try:
+        status = read_session_status(session_name)
+    except Exception:
+        return False
+    if not status or status.get("status") in ("failed", "exited"):
+        return False
+    try:
+        result = subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
 def crash_respawn_allowed() -> bool:
     """False when a live game-start successor already holds the lobby.
 
     Respawning the crashed instance then would fight it for the one-per-IP
     lobby slot, so the successor simply takes over.
     """
-    succ = game_successor_session
-    if succ and read_live_successor(succ) is not None:
-        log("INFO", "Successor lobby already live; not respawning crashed instance.")
+    if successor_covering(game_successor_session):
+        log("INFO", "Successor already covering the lobby; not respawning.")
         return False
     return True
 

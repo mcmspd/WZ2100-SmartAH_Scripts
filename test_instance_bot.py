@@ -1004,16 +1004,35 @@ class GameSuccessorTests(unittest.TestCase):
         self.assertIsNone(ib.read_live_successor(None))
 
     def test_crash_respawn_allowed(self):
-        with unittest.mock.patch.object(ib, "read_live_successor",
-                                        return_value=(2101, "lid")):
+        with unittest.mock.patch.object(ib, "successor_covering",
+                                        return_value=True):
             ib.game_successor_session = "S"
             self.assertFalse(ib.crash_respawn_allowed())
-        with unittest.mock.patch.object(ib, "read_live_successor",
-                                        return_value=None):
+        with unittest.mock.patch.object(ib, "successor_covering",
+                                        return_value=False):
             ib.game_successor_session = "S"
             self.assertTrue(ib.crash_respawn_allowed())
         ib.game_successor_session = None
         self.assertTrue(ib.crash_respawn_allowed())
+
+    def test_successor_covering_shapes(self):
+        def fake_run(cmd, **kw):
+            m = unittest.mock.Mock()
+            m.returncode = 0 if cmd[-1] == "S_LIVE" else 1
+            return m
+        with unittest.mock.patch.object(ib, "read_session_status",
+                                        return_value={"status": "starting"}), \
+             unittest.mock.patch.object(ib.subprocess, "run", fake_run):
+            self.assertTrue(ib.successor_covering("S_LIVE"))
+            self.assertFalse(ib.successor_covering("S_DEAD"))
+        with unittest.mock.patch.object(ib, "read_session_status",
+                                        return_value={"status": "failed"}), \
+             unittest.mock.patch.object(ib.subprocess, "run", fake_run):
+            self.assertFalse(ib.successor_covering("S_LIVE"))
+        with unittest.mock.patch.object(ib, "read_session_status",
+                                        return_value=None):
+            self.assertFalse(ib.successor_covering("S_LIVE"))
+        self.assertFalse(ib.successor_covering(None))
 
 class SpawnCapTests(unittest.TestCase):
     def _spawn(self, live):
