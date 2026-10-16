@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lobby_off.sh — steer a WZ instance user's outbound HTTPS into the MITM proxy.
-# Usage: sudo ./lobby_off.sh <wz-user> [proxy-port]   (default port 8080)
+# Usage: sudo ./lobby_off.sh <wz-user> [proxy-port]   (default port 18080)
 # Requires the proxy (lobby_mitm.py) listening on 127.0.0.1:<port>.
 # Idempotent. Only affects NEW connections from that UID; ESTABLISHED player
 # traffic is untouched. Only port 443 is redirected; the proxy allowlists the
@@ -17,7 +17,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 WZ_USER=${1:?Usage: sudo ./lobby_off.sh <wz-user> [proxy-port]}
-PORT=${2:-8080}
+PORT=${2:-18080}
 
 if ! id "$WZ_USER" >/dev/null 2>&1; then
   echo "Error: unknown user $WZ_USER" >&2

@@ -10,7 +10,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 WZ_USER=${1:?Usage: sudo ./lobby_on.sh <wz-user> [proxy-port]}
-PORT=${2:-8080}
+PORT=${2:-18080}
 
 if iptables -t nat -C OUTPUT -m owner --uid-owner "$WZ_USER" -p tcp --dport 443 \
     -j REDIRECT --to-port "$PORT" 2>/dev/null; then
