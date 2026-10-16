@@ -48,7 +48,15 @@ MAX_RESTARTS_PER_HOUR = 3    # give up respawning after this many restarts in 36
 MIGRATION_RETRY_BASE = 600   # seconds: base delay before retrying a failed migration
 MIGRATION_MAX_ATTEMPTS = 3   # give up migration retries after this many failures
 MIGRATION_DRAIN_SECONDS = 600  # seconds to wait for players to rejoin before old shutdown
-MIGRATION_NAME_SUFFIX = " (new)"  # appended to the successor lobby name
+MIGRATION_NAME_SUFFIX = " [new]"  # appended to the successor lobby name (lobby-safe charset)
+
+# Charset observed accepted by the live lobby (letters/digits/space/_/[]).
+LOBBY_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9 _\[\]]+$")
+
+
+def is_lobby_safe_name(name: str) -> bool:
+    """Lobby rejects names with special chars (INPUT_VALIDATION_FAILED)."""
+    return bool(name) and len(name) <= 60 and bool(LOBBY_SAFE_NAME_RE.fullmatch(name))
 LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate session log past this size
 PUBLIC_IP_TTL = 300  # seconds: cache get_public_ip() this long
 
@@ -956,6 +964,11 @@ def _start_timeout_expired():
             if migration_attempts >= MIGRATION_MAX_ATTEMPTS:
                 log("TIMEOUT", "Migration attempts exhausted. Keeping current lobby open; will not retry.")
                 return
+        successor_name = config.get("game_name", "") + config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX)
+        if not is_lobby_safe_name(successor_name):
+            log("ERROR", f"Successor lobby name {successor_name!r} has unsafe characters; aborting migration.")
+            bcast("Migration aborted: lobby name not acceptable.")
+            return
         mins = START_TIMEOUT // 60
         log("TIMEOUT", f"{mins}-minute start window expired. Spawning new instance to migrate players...")
         bcast("Lobby timeout expired. Launching fresh lobby...")
@@ -1433,6 +1446,14 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
         entry = get_map_entry(new_map)
         new_mods = list(entry["mods"]) if entry else []
         mod_note = f" (+{len(new_mods)} mods: {', '.join(new_mods)})" if new_mods else ""
+        successor_name = config.get("game_name", "") + config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX)
+        if not is_lobby_safe_name(successor_name):
+            if sender_pk:
+                dm(sender_pk, f"Migration aborted: lobby name {successor_name!r} not acceptable.")
+            log("ERROR", f"Successor lobby name {successor_name!r} has unsafe characters; aborting map change.")
+            with map_change_lock:
+                map_change_in_progress = False
+            return
         bcast(f"Map change to {new_map}{mod_note} requested by {sender_name}. Launching new lobby...")
 
         def _handle_map_change(map_to_load: str, mods_to_load: list):
