@@ -79,6 +79,7 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
 - Timeout 90 → 80 min (`START_TIMEOUT=4800`).
 - Per-map mods: `mods/` mirrors `maps/`; `--mod_mp` staging into `<configdir>/mods/multiplay/`; name validation + fail-fast.
 - Config-driven `"maps": [{name, mods}]` (dir scan is back-compat fallback); `/maps` annotates mods; spawn/timeout thread name+mods through.
+- Game-start successor: stock WZ unlists on match start, so `startMultiplayerGame` spawns a base-name successor lobby (same map+mods) to cover the running game; post-game the parent hands players over via the relay redirect and exits (no per-game leak); crash respawn yields when the successor is live.
 - `save_authorized_pkeys` locked (dedicated `.lock` file + atomic replace); `get_public_ip` cached (`PUBLIC_IP_TTL`) with fallback providers; size-based log rotation; `open_ports.sh` idempotent + `install_dep.sh` hardened; `README.md`; `test_instance_bot.py` + `test_lobby_mitm.py` (run: `python3 -m unittest`).
 
 ## Remaining polish

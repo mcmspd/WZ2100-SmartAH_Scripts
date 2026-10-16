@@ -866,3 +866,147 @@ class SavePkeysLockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+class GameSuccessorTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.process, ib.game_started,
+                     ib.game_successor_session, ib.map_change_in_progress,
+                     ib.quit_after_game, ib.current_map_name,
+                     ib.current_map_mods)
+        ib.config = {"game_name": "FreeHost", "migration_name_suffix": " 2"}
+        ib.quit_after_game = False
+        ib.game_started = False
+        ib.game_successor_session = None
+        ib.map_change_in_progress = False
+        ib.current_map_name = "M"
+        ib.current_map_mods = ["modA"]
+
+    def tearDown(self):
+        (ib.config, ib.process, ib.game_started,
+         ib.game_successor_session, ib.map_change_in_progress,
+         ib.quit_after_game, ib.current_map_name,
+         ib.current_map_mods) = self._old
+
+    class _SyncThread:
+        def __init__(self, target=None, args=(), **kw):
+            self._t = target
+            self._a = args
+        def start(self):
+            self._t(*self._a)
+
+    def test_game_start_marks_and_spawns_thread(self):
+        timer = unittest.mock.Mock()
+        ib.start_timeout_timer = timer
+        started = []
+        real_thread = ib.threading.Thread
+        try:
+            ib.threading.Thread = lambda target=None, args=(), **kw: (
+                started.append(target), self._SyncThread(target, args, **kw))[1]
+            with unittest.mock.patch.object(ib, "_spawn_game_successor", lambda: started.append("ran")):
+                ib._on_game_started()
+        finally:
+            ib.threading.Thread = real_thread
+            ib.start_timeout_timer = None
+        self.assertTrue(ib.game_started)
+        timer.cancel.assert_called_once_with()
+        self.assertIn("ran", started)
+
+    def test_spawn_worker_records_base_name_successor(self):
+        ib.game_started = True
+        ib.process = unittest.mock.Mock()
+        ib.process.poll.return_value = None
+        with unittest.mock.patch.object(ib, "spawn_new_instance",
+                                        return_value=(2101, "S")) as sp, \
+             unittest.mock.patch.object(ib, "wait_for_new_instance_ready",
+                                        return_value={"lobby_id": "lid-1"}):
+            ib._spawn_game_successor()
+        sp.assert_called_once_with("M", ["modA"], name_suffix="")
+        self.assertEqual(ib.game_successor_session, "S")
+        self.assertFalse(ib.map_change_in_progress)
+        ib.process = None
+
+    def test_spawn_worker_skips_when_claim_held(self):
+        ib.game_started = True
+        ib.map_change_in_progress = True
+        with unittest.mock.patch.object(ib, "spawn_new_instance") as sp:
+            ib._spawn_game_successor()
+        sp.assert_not_called()
+        self.assertIsNone(ib.game_successor_session)
+
+    def test_spawn_worker_records_nothing_on_failure(self):
+        ib.game_started = True
+        ib.process = unittest.mock.Mock()
+        ib.process.poll.return_value = None
+        with unittest.mock.patch.object(ib, "spawn_new_instance",
+                                        return_value=(2101, "S")), \
+             unittest.mock.patch.object(ib, "wait_for_new_instance_ready",
+                                        return_value=None):
+            ib._spawn_game_successor()
+        self.assertIsNone(ib.game_successor_session)
+        self.assertFalse(ib.map_change_in_progress)
+        ib.process = None
+
+    def test_game_end_hands_over_to_live_successor(self):
+        ib.game_started = True
+        ib.game_successor_session = "S"
+        ib.process = unittest.mock.Mock()
+        ib.process.poll.return_value = None
+        sent = []
+        with unittest.mock.patch.object(ib, "read_live_successor",
+                                        return_value=(2101, "lid-1")), \
+             unittest.mock.patch.object(ib.threading, "Thread", self._SyncThread), \
+             unittest.mock.patch.object(ib, "migrate_to_successor",
+                                        return_value=True) as mg, \
+             unittest.mock.patch.object(ib, "send_cmd",
+                                        lambda c, log_command=True: sent.append(c) or True):
+            ib.check_game_ended("started")
+        mg.assert_called_once_with(2101, "S", "lid-1", "FreeHost", "post-game")
+        self.assertTrue(ib.quit_after_game)
+        self.assertIn("shutdown now", sent)
+        self.assertIsNone(ib.game_successor_session)
+        ib.process = None
+        ib.quit_after_game = False
+        ib.map_change_in_progress = False
+
+    def test_game_end_rearms_when_successor_dead(self):
+        ib.game_started = True
+        ib.game_successor_session = "S"
+        ib.process = unittest.mock.Mock()
+        ib.process.poll.return_value = None
+        with unittest.mock.patch.object(ib, "read_live_successor",
+                                        return_value=None), \
+             unittest.mock.patch.object(ib, "arm_start_timeout") as arm, \
+             unittest.mock.patch.object(ib, "migrate_to_successor") as mg:
+            ib.check_game_ended("started")
+        arm.assert_called_once_with()
+        mg.assert_not_called()
+        self.assertFalse(ib.game_started)
+        self.assertIsNone(ib.game_successor_session)
+        ib.process = None
+
+    def test_read_live_successor_shapes(self):
+        def fake_run(cmd, **kw):
+            m = unittest.mock.Mock()
+            m.returncode = 0 if cmd[-1] == "S_LIVE" else 1
+            return m
+        with unittest.mock.patch.object(ib, "read_session_status",
+                                        return_value={"status": "ready", "port": 2101,
+                                                      "lobby_id": "lid"}), \
+             unittest.mock.patch.object(ib.subprocess, "run", fake_run):
+            self.assertEqual(ib.read_live_successor("S_LIVE"), (2101, "lid"))
+            self.assertIsNone(ib.read_live_successor("S_DEAD"))
+        with unittest.mock.patch.object(ib, "read_session_status",
+                                        return_value={"status": "exited"}):
+            self.assertIsNone(ib.read_live_successor("S_LIVE"))
+        self.assertIsNone(ib.read_live_successor(None))
+
+    def test_crash_respawn_allowed(self):
+        with unittest.mock.patch.object(ib, "read_live_successor",
+                                        return_value=(2101, "lid")):
+            ib.game_successor_session = "S"
+            self.assertFalse(ib.crash_respawn_allowed())
+        with unittest.mock.patch.object(ib, "read_live_successor",
+                                        return_value=None):
+            ib.game_successor_session = "S"
+            self.assertTrue(ib.crash_respawn_allowed())
+        ib.game_successor_session = None
+        self.assertTrue(ib.crash_respawn_allowed())

@@ -111,6 +111,11 @@ game_started = False
 start_timeout_timer = None
 start_timeout_lock = threading.Lock()
 
+# Lobby successor spawned when a game starts (stock WZ removes its listing on
+# match start, so without this the lobby goes dark for the whole game).
+# Holds the tmux session name; cleared once consumed by the post-game handover.
+game_successor_session: str | None = None
+
 # Single-flight migration lock shared by timeout and map-change migrations.
 # (map_change_lock is kept as an alias so external behaviour is unchanged.)
 # The lock guards only short critical sections (claim/release + attempt
@@ -908,15 +913,157 @@ def arm_start_timeout(delay: float = START_TIMEOUT):
     start_timeout_timer.start()
 
 
+def _on_game_started():
+    """A match just started: cancel the start timeout and keep a lobby listed.
+
+    Stock WZ removes its listing on match start, so spawn a successor lobby
+    (base name, same map+mods) in a worker thread. No redirect/shutdown here:
+    the players are in-game. Post-game, check_game_ended hands them over.
+    """
+    global game_started, start_timeout_timer
+    log("EVENT", "Game started.")
+    with start_timeout_lock:
+        game_started = True
+        if start_timeout_timer is not None:
+            start_timeout_timer.cancel()
+            start_timeout_timer = None
+    threading.Thread(target=_spawn_game_successor, daemon=True,
+                     name="game-successor").start()
+
+
+def _spawn_game_successor():
+    """Worker: bring up the lobby successor that covers a running game."""
+    global game_successor_session
+    if not _try_claim_migration():
+        log("GAME", "A migration is already in progress; skipping game-start successor.")
+        return
+    try:
+        with start_timeout_lock:
+            if not game_started or process is None or process.poll() is not None:
+                return
+        spawned = spawn_new_instance(current_map_name or config.get("map_name", ""),
+                                     list(current_map_mods),
+                                     name_suffix="")
+        if spawned is None:
+            log("WARN", "Game-start successor refused (cap reached or no free port). "
+                         "Lobby stays dark until post-game.")
+            return
+        new_port, new_session = spawned
+        status = wait_for_new_instance_ready(new_session, timeout=60.0)
+        if status and status.get("lobby_id"):
+            game_successor_session = new_session
+            log("GAME", f"Lobby successor {new_session} listed during game "
+                        f"(lobby {status['lobby_id']}).")
+        else:
+            err = status.get("error") if status else "no response from new instance"
+            log("WARN", f"Game-start successor failed: {err}. Lobby dark until post-game.")
+    except Exception as e:
+        log("WARN", f"Error spawning game-start successor: {e}")
+    finally:
+        _release_migration_claim()
+
+
 def check_game_ended(prev_state):
-    """Stock WZ returns to the lobby in-process after a game; re-arm the timeout."""
-    global game_started
-    if game_started and prev_state in ("starting", "started"):
-        log("EVENT", "Game ended, back in lobby. Re-arming start timeout.")
+    """Stock WZ returns to the lobby in-process after a game.
+
+    When a live game-start successor holds the lobby, hand the players over
+    to it (seamless redirect; their one redirect-follow is still unused in
+    this flow) and shut down. Otherwise stay on and re-arm the start timeout.
+    """
+    global game_started, game_successor_session
+    if not (game_started and prev_state in ("starting", "started")):
+        return
+    succ = game_successor_session
+    live = read_live_successor(succ) if succ else None
+    if live is not None and _try_claim_migration():
+        game_successor_session = None
         with start_timeout_lock:
             game_started = False
-            if process is not None and process.poll() is None:
-                arm_start_timeout()
+        log("EVENT", f"Game ended; handing players over to successor {succ}.")
+        threading.Thread(target=_post_game_handover, args=(succ, live),
+                         daemon=True, name="post-game-handover").start()
+        return
+    if succ is not None:
+        log("WARN", "Game successor is gone; staying on as lobby (re-arming start timeout).")
+        game_successor_session = None
+    else:
+        log("EVENT", "Game ended, back in lobby. Re-arming start timeout.")
+    with start_timeout_lock:
+        game_started = False
+        if process is not None and process.poll() is None:
+            arm_start_timeout()
+
+
+def read_live_successor(session_name: str | None) -> tuple[int, str] | None:
+    """Return (port, lobby_id) if the successor lobby is still live, else None.
+
+    Requires both a ready status file and a live tmux session, so a successor
+    that died mid-game is never handed players.
+    """
+    if not session_name:
+        return None
+    try:
+        status = read_session_status(session_name)
+    except Exception:
+        return None
+    if not status or status.get("status") != "ready" or not status.get("lobby_id"):
+        return None
+    try:
+        result = subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return int(status["port"]), status["lobby_id"]
+    except Exception:
+        return None
+
+
+def _post_game_handover(successor_session: str, live: tuple[int, str]):
+    """Move post-game players to the live successor, then shut down.
+
+    Runs on a worker thread; the migration claim is held by the caller.
+    On failure the claim is released and the start timeout re-armed so the
+    lobby is not left dark.
+    """
+    global quit_after_game, migration_attempts
+    succeeded = False
+    try:
+        new_port, new_lobby_id = live
+        game_name = config.get("game_name", "")
+        if not migrate_to_successor(new_port, successor_session, new_lobby_id,
+                                    game_name, "post-game"):
+            return
+        quit_after_game = True
+        with migration_lock:
+            migration_attempts = 0
+        succeeded = True
+        send_cmd("shutdown now")
+    except Exception as e:
+        log("WARN", f"Error during post-game handover: {e}")
+    finally:
+        if not succeeded:
+            _release_migration_claim()
+            with start_timeout_lock:
+                if process is not None and process.poll() is None:
+                    arm_start_timeout()
+
+
+def crash_respawn_allowed() -> bool:
+    """False when a live game-start successor already holds the lobby.
+
+    Respawning the crashed instance then would fight it for the one-per-IP
+    lobby slot, so the successor simply takes over.
+    """
+    succ = game_successor_session
+    if succ and read_live_successor(succ) is not None:
+        log("INFO", "Successor lobby already live; not respawning crashed instance.")
+        return False
+    return True
 
 
 def announce_successor(game_name: str, new_port: int):
@@ -1797,17 +1944,7 @@ def process_line(line: str):
     elif line.startswith("WZEVENT: playerLeft:"):
         on_player_left(line)
     elif line.startswith("WZEVENT: startMultiplayerGame"):
-        log("EVENT", "Game started.")
-        with start_timeout_lock:
-            game_started = True
-            if start_timeout_timer is not None:
-                start_timeout_timer.cancel()
-                start_timeout_timer = None
-        # NOTE: stock WZ returns to the lobby in-process after a game, so no
-        # successor is spawned here (that leaked one lobby instance per game).
-        # Post-game the room state flips back to "lobby" (see on_room_status),
-        # which re-arms the start timeout. If the process exits, the crash
-        # handler in main() respawns it subject to uptime/restart caps.
+        _on_game_started()
     elif line.startswith("WZEVENT: join approval needed:"):
         on_join_approval(line)
     elif line.startswith("WZEVENT: lag-kick:"):
@@ -2295,7 +2432,7 @@ def main():
             start_timeout_timer.cancel()
             start_timeout_timer = None
 
-    if not quit_after_game and not lobby_verification_failed:
+    if not quit_after_game and not lobby_verification_failed and crash_respawn_allowed():
         uptime = time.time() - (instance_start_time or time.time())
         min_uptime = float(config.get("min_uptime_to_respawn_seconds", MIN_UPTIME_TO_RESPAWN))
         if uptime < min_uptime:
