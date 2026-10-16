@@ -401,11 +401,12 @@ class UnlistStoreTests(unittest.TestCase):
 
 class LobbyNameTests(unittest.TestCase):
     def test_safe_names(self):
-        for good in ["FreeHost", "FreeHost [new]", "3v3 NTW [6p]", "A B_C1"]:
+        for good in ["FreeHost", "FreeHost 2", "A B C1", "dumbyhost"]:
             self.assertTrue(ib.is_lobby_safe_name(good), good)
 
     def test_unsafe_names(self):
-        for bad in ["", "FreeHost (new)", "a/b", "x" * 61, "semi;colon", "quo\"te"]:
+        for bad in ["", "FreeHost (new)", "FreeHost [new]", "FreeHost [2]",
+                    "a/b", "x" * 61, "semi;colon", "quo\"te", "under_score"]:
             self.assertFalse(ib.is_lobby_safe_name(bad), bad)
 
 class MigrateFlowTests(unittest.TestCase):

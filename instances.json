@@ -41,7 +41,7 @@
   "lobby_token_store": "",
   "lobby_blocklist": "",
   "migration_drain_seconds": 600,
-  "migration_name_suffix": " [new]",
+  "migration_name_suffix": " 2",
   "max_live_sessions": 2,
   "min_uptime_to_respawn_seconds": 120,
   "max_restarts_per_hour": 3,

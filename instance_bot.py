@@ -48,10 +48,11 @@ MAX_RESTARTS_PER_HOUR = 3    # give up respawning after this many restarts in 36
 MIGRATION_RETRY_BASE = 600   # seconds: base delay before retrying a failed migration
 MIGRATION_MAX_ATTEMPTS = 3   # give up migration retries after this many failures
 MIGRATION_DRAIN_SECONDS = 600  # seconds to wait for players to rejoin before old shutdown
-MIGRATION_NAME_SUFFIX = " [new]"  # appended to the successor lobby name (lobby-safe charset)
+MIGRATION_NAME_SUFFIX = " 2"  # appended to the successor lobby name (lobby-safe charset)
 
-# Charset observed accepted by the live lobby (letters/digits/space/_/[]).
-LOBBY_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9 _\[\]]+$")
+# Live-fire result: the lobby rejects brackets/parens (INPUT_VALIDATION_FAILED)
+# even though older listings contain them. Only alphanumerics + space proven.
+LOBBY_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9 ]+$")
 
 
 def is_lobby_safe_name(name: str) -> bool:
