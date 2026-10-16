@@ -709,13 +709,20 @@ def load_config() -> dict:
 def update_roster_from_status(status_json: dict):
     """
     Rebuild the roster from a parsed __WZROOMSTATUS__ JSON object.
-    Roster entries: {type, name, pos, is_spec}
+    Roster entries: {type, name, pos, idx, is_spec}
+
+    Vocabulary (see upstream src/stdinreader.cpp):
+      idx = NetPlay slot index (players[] array order; also the WZCHATLOB /
+            playerLeft sender index and the "slot" in player-join lines).
+      pos = lobby position (the slot numbers players see; may differ from idx).
+    Votes and /votekick slots are positions; chat senders arrive as indexes
+    and must be translated via idx -> pos.
     """
     global roster
     new_roster: dict[str, dict] = {}
 
-    # Process active players
-    for p in status_json.get("players", []):
+    # Process active players (array order == NetPlay index)
+    for idx, p in enumerate(status_json.get("players", [])):
         if p.get("type") != "player":
             continue
         pk = p.get("pk")
@@ -726,11 +733,13 @@ def update_roster_from_status(status_json: dict):
             "type": "player",
             "name": p.get("name", "Unknown"),
             "pos": pos,
+            "idx": idx,
             "is_spec": False,
             "ip": p.get("ip"),
         }
 
-    # Process spectators
+    # Process spectators (array order is NOT the NetPlay index: closed and
+    # empty slots are skipped upstream, so no idx is recorded for specs)
     for s in status_json.get("specs", []):
         if s.get("type") != "spec":
             continue
@@ -741,6 +750,7 @@ def update_roster_from_status(status_json: dict):
             "type": "spec",
             "name": s.get("name", "Unknown"),
             "pos": None,
+            "idx": None,
             "is_spec": True,
             "ip": s.get("ip"),
         }
@@ -753,6 +763,30 @@ def update_roster_from_status(status_json: dict):
     active_count = sum(1 for e in roster.values() if not e["is_spec"])
     spec_count = sum(1 for e in roster.values() if e["is_spec"])
     log("ROSTER", f"Updated: {len(roster)} entries ({active_count} players, {spec_count} specs)")
+
+
+def get_pos_by_idx(idx: int) -> int | None:
+    """Translate a NetPlay slot index (chat/playerLeft sender) to a lobby position."""
+    with roster_lock:
+        for entry in roster.values():
+            if entry["type"] == "player" and entry.get("idx") == idx:
+                return entry.get("pos")
+    return None
+
+
+def get_pos_by_sender(sender_pk: str | None, sender_idx: int | None) -> int | None:
+    """Resolve a chat sender to a lobby position. Prefers pk, falls back to idx."""
+    with roster_lock:
+        if sender_pk and sender_pk in roster:
+            entry = roster[sender_pk]
+            if entry["type"] == "player":
+                return entry.get("pos")
+            return None  # spectators have no position
+        if sender_idx is not None:
+            for entry in roster.values():
+                if entry["type"] == "player" and entry.get("idx") == sender_idx:
+                    return entry.get("pos")
+    return None
 
 
 def get_pk_by_pos(pos: int) -> str | None:
@@ -1015,19 +1049,29 @@ def _check_all_voted():
         _resolve_vote(timed_out=False)
 
 
-def start_vote(initiator_pos: int, target_pos: int):
+def start_vote(initiator_idx: int, initiator_pk: str | None, target_pos: int):
     """
-    Begin a vote-kick session using position numbers.
-    Resolves positions to pk internally, then proceeds with the vote.
+    Begin a vote-kick session. initiator_idx/pk identify the chat sender
+    (NetPlay index space); target_pos is the user-facing lobby position.
+    The initiator index is translated to a position internally; all vote
+    bookkeeping stays in position space.
     """
     global vote_state
+
+    initiator_pos = get_pos_by_sender(initiator_pk, initiator_idx)
+    if initiator_pos is None:
+        if initiator_pk:
+            dm(initiator_pk, "Could not find you in the lobby roster. Try again in a moment.")
+        else:
+            log("VOTE", f"Initiator idx {initiator_idx} not found in roster.")
+        return
 
     # Resolve positions to pk
     initiator_pk = get_pk_by_pos(initiator_pos)
     target_result = get_entry_by_pos(target_pos)
 
     if initiator_pk is None:
-        log("VOTE", f"Initiator at slot {initiator_pos} not found in roster.")
+        log("VOTE", f"Initiator at position {initiator_pos} not found in roster.")
         return
 
     if target_result is None:
@@ -1115,18 +1159,22 @@ def start_vote(initiator_pos: int, target_pos: int):
         _check_all_voted()
 
 
-def register_vote(voter_pos: int, choice: bool):
-    """Register a yes/no vote from a player at a given position."""
+def register_vote(voter_idx: int, voter_pk: str | None, choice: bool):
+    """Register a yes/no vote from a chat sender (NetPlay index space)."""
+    voter_pos = get_pos_by_sender(voter_pk, voter_idx)
     with vote_lock:
         if vote_state is None:
-            voter_pk = get_pk_by_pos(voter_pos)
             if voter_pk:
                 dm(voter_pk, "There is no active vote right now.")
             return
 
         vs = vote_state
 
-        # Resolve voter position to pk for checks
+        # Resolve voter to pk for checks
+        if voter_pos is None:
+            if voter_pk:
+                dm(voter_pk, "Spectators are not eligible to vote.")
+            return
         voter_pk = get_pk_by_pos(voter_pos)
         voter_entry = get_entry_by_pk(voter_pk) if voter_pk else None
 
@@ -1167,28 +1215,35 @@ def register_vote(voter_pos: int, choice: bool):
         _check_all_voted()
 
 
-def cancel_vote_for_pos(pos: int):
+def cancel_vote_for_idx(left_idx: int):
     """
-    If the target of the current vote leaves, cancel the vote automatically.
-    Called when a player leaves.
+    A player left (playerLeft carries the NetPlay index). Translate to the
+    lobby position, then cancel the vote if it targeted them, else drop them
+    from the eligible set. Falls back to treating the index as a position so
+    a stale roster cannot wedge an active vote.
     """
+    left_pos = get_pos_by_idx(left_idx)
+    candidates = {p for p in (left_pos, left_idx) if p is not None}
     with vote_lock:
         global vote_state
         if vote_state is None:
             return
-        if vote_state["target_pos"] == pos:
+        if vote_state["target_pos"] in candidates:
             try:
                 vote_state["timer"].cancel()
             except Exception:
                 pass
-            bcast(f"{vote_state['target_name']} (slot {pos}) has left. Vote cancelled.")
+            bcast(f"{vote_state['target_name']} (slot {vote_state['target_pos']}) has left. Vote cancelled.")
             log("VOTE", "Vote cancelled — target left the lobby.")
             vote_state = None
+            return
 
-        # Also remove the leaving player from eligible voters if they haven't voted
-        if vote_state is not None and pos in vote_state["eligible"]:
-            vote_state["eligible"].discard(pos)
-            vote_state["votes"].pop(pos, None)
+        # Otherwise remove the leaving player from eligible voters
+        if vote_state is not None:
+            for pos in candidates:
+                if pos in vote_state["eligible"]:
+                    vote_state["eligible"].discard(pos)
+                    vote_state["votes"].pop(pos, None)
             _check_all_voted()
 
 # ─── Event Handlers ───────────────────────────────────────────────────────────
@@ -1229,6 +1284,7 @@ def on_player_join(line: str):
 def on_player_left(line: str):
     """
     Handle: WZEVENT: playerLeft: <playerIdx> <gameTime> <b64pubkey> <hash> <V|?> <b64name> <ip>
+    playerIdx is the NetPlay slot index (translated to position internally).
     Updates any active vote. Roster is maintained via __WZROOMSTATUS__.
     """
     content = line[len("WZEVENT: playerLeft: "):].strip()
@@ -1245,7 +1301,7 @@ def on_player_left(line: str):
     log("LEFT", f"Slot {slot}")
 
     # Handle vote implications by position
-    cancel_vote_for_pos(slot)
+    cancel_vote_for_idx(slot)
 
 
 def on_chat_cmd(line: str):
@@ -1506,7 +1562,7 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
                 dm(sender_pk, "Invalid slot number. Usage: /votekick <slot>")
             return
 
-        start_vote(sender_slot, target_slot)
+        start_vote(sender_slot, sender_pk, target_slot)
 
     # ── /vote <y/n> ───────────────────────────────────────────────────────────
     elif msg_lower.startswith("/vote"):
@@ -1517,9 +1573,9 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
             return
         choice_str = tokens[1].lower()
         if choice_str in VOTE_YES:
-            register_vote(sender_slot, True)
+            register_vote(sender_slot, sender_pk, True)
         elif choice_str in VOTE_NO:
-            register_vote(sender_slot, False)
+            register_vote(sender_slot, sender_pk, False)
         else:
             if sender_pk:
                 dm(sender_pk, "Unknown vote option. Usage: /vote <y/n>")

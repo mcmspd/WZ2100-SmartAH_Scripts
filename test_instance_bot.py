@@ -113,6 +113,14 @@ class VoteTests(unittest.TestCase):
         ib.roster = {}
         ib.process = None
 
+    # idx and pos deliberately diverge (chat index 5 sits in lobby slot 0, ...)
+    # to prove sender translation instead of index/position conflation.
+    ROSTER = {
+        "PK0": {"type": "player", "name": "Ann", "pos": 0, "idx": 5, "is_spec": False},
+        "PK1": {"type": "player", "name": "Cat", "pos": 1, "idx": 1, "is_spec": False},
+        "PK2": {"type": "player", "name": "Bob", "pos": 2, "idx": 2, "is_spec": False},
+    }
+
     def _mk_state(self):
         timer = mock.Mock()
         ib.vote_state = {
@@ -129,11 +137,7 @@ class VoteTests(unittest.TestCase):
 
     def test_unanimous_yes_kicks(self):
         timer = self._mk_state()
-        ib.roster = {
-            "PK0": {"type": "player", "name": "Ann", "pos": 0, "is_spec": False},
-            "PK1": {"type": "player", "name": "Cat", "pos": 1, "is_spec": False},
-            "PK2": {"type": "player", "name": "Bob", "pos": 2, "is_spec": False},
-        }
+        ib.roster = dict(self.ROSTER)
         with ib.vote_lock:
             ib._resolve_vote(timed_out=False)
         self.assertIsNone(ib.vote_state)
@@ -141,14 +145,43 @@ class VoteTests(unittest.TestCase):
 
     def test_single_no_blocks_kick(self):
         self._mk_state()
-        ib.roster = {
-            "PK0": {"type": "player", "name": "Ann", "pos": 0, "is_spec": False},
-            "PK1": {"type": "player", "name": "Cat", "pos": 1, "is_spec": False},
-            "PK2": {"type": "player", "name": "Bob", "pos": 2, "is_spec": False},
-        }
-        ib.register_vote(1, False)
+        ib.roster = dict(self.ROSTER)
+        ib.register_vote(1, "PK1", False)
         self.assertIsNone(ib.vote_state)  # all voted -> resolved as FAILED
         self.assertIsNone(ib.process)  # no kick issued (process is None anyway)
+
+
+    def test_idx_translated_to_pos(self):
+        # Ann chats from NetPlay index 5 but sits in lobby position 0.
+        ib.roster = dict(self.ROSTER)
+        self.assertEqual(ib.get_pos_by_sender("PK0", 5), 0)
+        self.assertEqual(ib.get_pos_by_sender(None, 5), 0)
+        self.assertEqual(ib.get_pos_by_idx(2), 2)
+        self.assertIsNone(ib.get_pos_by_idx(99))
+
+    def test_start_vote_translates_initiator(self):
+        ib.roster = dict(self.ROSTER)
+        ib.start_vote(5, "PK0", 2)  # idx 5 == position 0
+        try:
+            self.assertIsNotNone(ib.vote_state)
+            self.assertEqual(ib.vote_state["initiator_pos"], 0)
+            self.assertEqual(ib.vote_state["votes"], {0: True})
+        finally:
+            if ib.vote_state is not None:
+                ib.vote_state["timer"].cancel()
+                ib.vote_state = None
+
+    def test_cancel_by_index(self):
+        timer = mock.Mock()
+        ib.roster = dict(self.ROSTER)
+        ib.vote_state = {
+            "target_pos": 2, "target_pk": "PK2", "target_name": "Bob",
+            "initiator_pos": 0, "initiator_pk": "PK0",
+            "eligible": {0, 1}, "votes": {0: True}, "timer": timer,
+        }
+        ib.cancel_vote_for_idx(2)  # Bob's NetPlay index is 2 here
+        self.assertIsNone(ib.vote_state)
+        timer.cancel.assert_called()
 
 
 class JoinApprovalTests(unittest.TestCase):
@@ -255,7 +288,6 @@ class UnlistTests(unittest.TestCase):
         finally:
             ib.session_global = ""
             shutil.rmtree(tmp, ignore_errors=True)
-
 class BuildCommandTests(unittest.TestCase):
     def setUp(self):
         self._old = (ib.config, ib.port_global, ib.session_global, ib.current_map_mods)
