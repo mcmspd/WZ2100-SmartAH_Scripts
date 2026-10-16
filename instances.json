@@ -59,13 +59,7 @@
   "wz_headless": true,
   "wz_nosound": true,
   "wz_debug_flags": [
-    "WZ",
     "NET",
-    "SCRIPT",
-    "MOVEMENT",
-    "ATTACK",
-    "SYNC",
-    "RESEARCH",
     "LOBBY"
   ],
   "wz_host_connection_provider": "tcp",
