@@ -54,10 +54,12 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
   immediately (instance exits, spawner backs off 20 min); every test POST is
   followed by an immediate DELETE; name-bisect runs spaced ≥3 min apart.
 - Game-name validation is server-side and picky: `INPUT_VALIDATION_FAILED`
-  ("avoid special characters") rejected `(new)`/`[new]`-style suffixes even
-  though live lobbies use brackets. Proven-safe: plain alphanumeric suffixes
-  (`FreeHost`, `FreeHost 2`). Every new suffix must pass `is_lobby_safe_name`
-  AND one spaced live POST before use; `nametest.py` is the tool for that.
+  ("avoid special characters") rejects brackets AND parens (proven live:
+  `FreeHost [2]` rejected on a clean slot right after `FreeHost` listed).
+  Older listings containing brackets predate the rule. Proven-safe charset:
+  letters/digits/space only — migration suffix is `" 2"`. Every new suffix
+  must pass `is_lobby_safe_name` AND one spaced live POST before use;
+  `nametest.py` is the tool for that.
 - One listing per public IP: free the slot with an authenticated Python
   DELETE (captured hostToken) before any new POST; never overlap listings.
 
