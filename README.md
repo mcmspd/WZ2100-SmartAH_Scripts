@@ -6,8 +6,9 @@ output, and reacts (greetings, vote-kick, map changes, timeout migration).
 
 ## Layout
 
-- `instance_bot.py` — the bot (run: `python3 instance_bot.py [port] [session] [map] [mods_csv]`).
-- `instances.json` — config: host identity, maps + per-map mods, WZ launch flags, caps.
+- `instance_bot.py` — the bot (run: `python3 instance_bot.py [port] [session] [map] [mods_csv] [suffix]`).
+- `wz_config.py` — config generation (library + CLI). `python3 wz_config.py --validate` checks maps/mods; `--map NAME` / `--all` pre-generates instance configs.
+- `autohost/` — pre-generated autohost JSON per map (`<MapName>.json`). Edit freely: the bot uses your file verbatim except instance identity (`challenge` map/maxPlayers/name/password), and fills team slots only if you define none. Missing file = bot generates + saves defaults here.
 - `maps/` — map `.wz` files referenced by name from `instances.json`.
 - `mods/` — mod `.wz` files referenced by name from per-map `mods` lists.
 - `test_instance_bot.py` — stdlib unit tests (`python3 -m unittest test_instance_bot`).
