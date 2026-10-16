@@ -122,7 +122,21 @@ Currently they land on the old lobby and wait for the mass redirect, which
 works — this only makes handoff seamless. Confirm the numeric code from
 `src/stdinreader.cpp` before wiring it into `on_join_approval`.
 
-## 5. Safety rules on the live host
+## 5. Production layout (deployed 2026-10-16) + safety rules
+
+- WZ instances run as `wzbot` from `/home/wzbot/WZ` (own repo clone,
+  `wz_backend=system`, `wz_binary=/usr/games/warzone2100.real`).
+- Proxy runs as `ubuntu` in tmux session `MITM`
+  (`python3 lobby_mitm.py --port 18080 ...`); restart with the same command
+  if it ever dies (WZ keeps running unlisted meanwhile).
+- `sudo ./lobby_off.sh wzbot 18080` is active and persisted via
+  `netfilter-persistent save`. Verify: `sudo iptables -t nat -L OUTPUT -n`.
+- Live instance: `sudo -u wzbot tmux attach -t WZ_PROD` (observe only).
+  Soak in progress since 03:15 UTC: 80-min timeout, `/maps`, and games will
+  exercise migration/redirect live — watch `tmux ls` (one `WZ_*`) and the
+  session log.
+
+Safety rules on the live host:
 
 - Read-only first: `tmux ls`, logs, status files — before any restart.
 - Never `tmux kill-session` a live `WZ_*` session with players; migrate with

@@ -60,7 +60,6 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
 - `save_authorized_pkeys` locked (`fcntl` + atomic replace); `get_public_ip` cached (`PUBLIC_IP_TTL`); size-based log rotation; `open_ports.sh` idempotent + `install_dep.sh` hardened; `README.md`; `test_instance_bot.py` (14 tests).
 
 ## Remaining polish
-- `instance_bot.py:914,1118,1129`: chat index vs roster `pos` mapping still needs verification against live lobby data. See `SERVER_HANDOFF.md §4a`.
 - Lobby blackhole: PROVEN live 2026-10-16 (stock WZ 4.7.0, real lobby).
   Token capture + Python `DELETE` + unlisted-but-running host all work.
   Operational requirements discovered: (a) flatpak WZ ignores the host CA
@@ -70,4 +69,8 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
   the steered traffic or its own upstream loops back (fork bomb → EMFILE);
   (c) real API base is `https://wzlobby.wz2100.net/lobby/api/v1/game`
   (note `/lobby` prefix from WZ `lobbyserver=` config). See `SERVER_HANDOFF.md §4c`.
-- Live-soak test: run one headed session through timeout + `/maps` + a real game and watch `tmux ls` stay at 1. See `SERVER_HANDOFF.md §4b`.
+- Slot-vs-pos: RESOLVED from upstream source (`src/stdinreader.cpp` room
+  dump uses lobby `position`, chat/playerLeft carry NetPlay index; the
+  `posToNetPlayer` mapper proves they diverge). Roster records both;
+  vote paths translate at the boundary (35 tests).
+- Soak: production instance live (see `SERVER_HANDOFF.md §5`).
