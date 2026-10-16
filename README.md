@@ -58,9 +58,31 @@ Migration (timeout/map-change) spawns successors automatically, capped at
 
 Configurable via `instances.json` (`wz_headless`, `wz_nosound`,
 `wz_debug_flags`, `wz_host_connection_provider`, `wz_portmapping`,
-`wz_async_join_approve`, `wz_enable_lobby_slashcmd`, `wz_extra_args`).
+`wz_async_join_approve`, `wz_enable_lobby_slashcmd`, `wz_extra_args`,
+`wz_backend: auto|flatpak|system`, `wz_binary` path override).
 Mods load via `--mod_mp` from `<configdir>/mods/multiplay/`, staged
 automatically from `mods/`.
+
+## Lobby MITM (token capture + Python unlist)
+
+`lobby_mitm.py` is a stdlib-only transparent proxy that captures the lobby
+`hostToken` so Python can `DELETE` a listing while the host keeps running:
+
+1. One-time: running the proxy generates `mitm-ca/`; install
+   `mitm-ca/ca.crt` into the system trust store.
+2. Run WZ instances as a dedicated user (e.g. `wzbot`); run the proxy as
+   another user — otherwise the proxy's own upstream loops back into
+   itself.
+3. `sudo ./lobby_off.sh <wz-user> [port]` steers that UID's port 443 into
+   the proxy; `sudo ./lobby_on.sh` restores direct access.
+4. Tokens land in `instance_configs/.lobby_tokens.json` (0600);
+   `unlist_self_via_api()` / admin `/unlobby` uses them.
+
+Constraints learned live: flatpak WZ ignores the host CA store — MITM'd
+instances must use the system binary (`wz_backend=system`,
+`wz_binary=/usr/games/warzone2100.real`). The real API base carries the
+`/lobby` prefix (`.../lobby/api/v1/game`); the bot reads it from the WZ
+`lobbyserver=` config so both always agree.
 
 ## Tests
 

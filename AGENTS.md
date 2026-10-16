@@ -61,5 +61,13 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
 
 ## Remaining polish
 - `instance_bot.py:914,1118,1129`: chat index vs roster `pos` mapping still needs verification against live lobby data. See `SERVER_HANDOFF.md §4a`.
-- Per-process lobby blackhole tooling (`uid-owner` rule or `LD_PRELOAD` shim) not yet built. See `SERVER_HANDOFF.md §4c`.
+- Lobby blackhole: PROVEN live 2026-10-16 (stock WZ 4.7.0, real lobby).
+  Token capture + Python `DELETE` + unlisted-but-running host all work.
+  Operational requirements discovered: (a) flatpak WZ ignores the host CA
+  store (cURL error 60) — MITM'd instances must use the apt binary
+  (`wz_backend=system`, `wz_binary=/usr/games/warzone2100.real`; the distro
+  bwrap wrapper is broken here); (b) proxy MUST run as a different UID than
+  the steered traffic or its own upstream loops back (fork bomb → EMFILE);
+  (c) real API base is `https://wzlobby.wz2100.net/lobby/api/v1/game`
+  (note `/lobby` prefix from WZ `lobbyserver=` config). See `SERVER_HANDOFF.md §4c`.
 - Live-soak test: run one headed session through timeout + `/maps` + a real game and watch `tmux ls` stay at 1. See `SERVER_HANDOFF.md §4b`.
