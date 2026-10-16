@@ -8,14 +8,19 @@ fi
 
 START_PORT=2100
 END_PORT=2110
+RELAY_PORT=2200
 
-if iptables -C INPUT -p tcp --dport ${START_PORT}:${END_PORT} -j ACCEPT 2>/dev/null; then
-  echo "TCP ports ${START_PORT}:${END_PORT} already accepted, nothing to do."
-else
-  echo "Inserting TCP ports ${START_PORT}:${END_PORT} before REJECT rule..."
-  iptables -I INPUT 5 -p tcp --dport ${START_PORT}:${END_PORT} -j ACCEPT
-  echo "TCP rules inserted successfully!"
-fi
+open_one() {
+  if iptables -C INPUT -p tcp --dport "$1" -j ACCEPT 2>/dev/null; then
+    echo "TCP port $1 already accepted, nothing to do."
+  else
+    echo "Inserting TCP port $1 before REJECT rule..."
+    iptables -I INPUT 5 -p tcp --dport "$1" -j ACCEPT
+  fi
+}
+
+open_one "${START_PORT}:${END_PORT}"
+open_one "${RELAY_PORT}"
 echo "----------------------------------------"
 iptables -L INPUT -n --line-numbers
 netfilter-persistent save

@@ -374,6 +374,68 @@ def _pump(src: socket.socket, dst: socket.socket, sniffer=None):
                 pass
 
 
+def read_relay_target(target_file: str | None, default_port: int) -> int:
+    """Current gameport for the join relay (file written by the bot)."""
+    if target_file:
+        try:
+            with open(target_file, "r", encoding="utf-8") as f:
+                return int(f.read().strip().split()[0])
+        except Exception:
+            pass
+    return default_port
+
+
+def handle_game_client(client: socket.socket, target_file: str | None, default_port: int):
+    """Splice one player connection to the game host via loopback.
+
+    The host sees 127.0.0.1, which stock Warzone always passes to approval
+    without lobby token checks, flood throttle or IP bans.
+    """
+    target = read_relay_target(target_file, default_port)
+    try:
+        upstream = socket.create_connection(("127.0.0.1", target), timeout=10)
+    except Exception as e:
+        peer = None
+        try:
+            peer = client.getpeername()
+        except Exception:
+            pass
+        log(f"game relay to 127.0.0.1:{target} failed for {peer}: {e}")
+        try:
+            client.close()
+        except Exception:
+            pass
+        return
+    t1 = threading.Thread(target=_pump, args=(client, upstream), daemon=True)
+    t2 = threading.Thread(target=_pump, args=(upstream, client), daemon=True)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+    for s in (client, upstream):
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def serve_game(listen_port: int, target_file: str | None, default_port: int):
+    """Listen for player TCP and relay each connection to the game host."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", listen_port))
+    srv.listen(128)
+    log(f"Game relay listening on 0.0.0.0:{listen_port} (target file: {target_file})")
+    try:
+        while True:
+            conn, _ = srv.accept()
+            threading.Thread(target=handle_game_client,
+                             args=(conn, target_file, default_port),
+                             daemon=True).start()
+    except KeyboardInterrupt:
+        pass
+
+
 class TokenSniffer:
     """Incremental scanner for create-response credentials (server -> client)."""
 
@@ -405,7 +467,8 @@ def strip_accept_encoding(head: bytes) -> bytes:
 
 def handle_client(client: socket.socket, sni_allow: list, ca_key: str, ca_crt: str,
                   certs_dir: str, store_path: str, upstream_cafile: str | None = None,
-                  blocklist_path: str | None = None):
+                  blocklist_path: str | None = None,
+                  forge_join_checks: bool = False):
     try:
         client.settimeout(15)
         orig_dst = get_original_dst(client)
@@ -425,7 +488,7 @@ def handle_client(client: socket.socket, sni_allow: list, ca_key: str, ca_crt: s
                 break
         if sni and sni in sni_allow:
             handle_intercepted(client, sni, orig_dst, ca_key, ca_crt, certs_dir, store_path,
-                                 upstream_cafile, blocklist_path)
+                                 upstream_cafile, blocklist_path, forge_join_checks)
         else:
             # Not TLS or not our target: nothing consumed, relay as-is.
             handle_passthrough_prefixed(client, b"", orig_dst, sni)
@@ -440,7 +503,8 @@ def handle_client(client: socket.socket, sni_allow: list, ca_key: str, ca_crt: s
 def handle_intercepted(client: socket.socket, sni: str, orig_dst: tuple[str, int] | None,
                                ca_key: str, ca_crt: str, certs_dir: str, store_path: str,
                                upstream_cafile: str | None = None,
-                               blocklist_path: str | None = None):
+                               blocklist_path: str | None = None,
+                               forge_join_checks: bool = False):
     upstream_host = orig_dst[0] if orig_dst else sni
     upstream_port = orig_dst[1] if orig_dst else 443
     crt, key = ensure_server_cert(ca_key, ca_crt, certs_dir, sni)
@@ -461,6 +525,24 @@ def handle_intercepted(client: socket.socket, sni: str, orig_dst: tuple[str, int
         cut = head.find(b"\r\n\r\n") + 4
         head, rest = head[:cut], head[cut:]
         head = strip_accept_encoding(head)
+        if forge_join_checks and head.startswith(b"POST ") \
+                and b"/check-join-request" in head.split(b"\r\n", 1)[0]:
+            # Answer the lobby's join vetting locally: pass everyone.
+            # (Password + bot approval still gate actual entry.)
+            body = b'{"pass": true}'
+            try:
+                tls_client.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                    b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+                    b"Connection: close\r\n\r\n" + body)
+            except Exception:
+                pass
+            try:
+                tls_client.close()
+            except Exception:
+                pass
+            log("FORGED join check PASS (lobby never consulted)")
+            return
         blocked_hit = request_targets_blocked_game(head, load_blocklist(blocklist_path))
         if blocked_hit:
             log(f"Blocking lobby request for game {blocked_hit} (forced abandon)")
@@ -537,7 +619,10 @@ def handle_passthrough_prefixed(client: socket.socket, prefix: bytes,
 
 
 def serve(port: int, sni_allow: list, ca_dir: str, certs_dir: str, store_path: str,
-          upstream_cafile: str | None = None, blocklist_path: str | None = None):
+          upstream_cafile: str | None = None, blocklist_path: str | None = None,
+          forge_join_checks: bool = False,
+          game_relay_port: int | None = None, relay_target_file: str | None = None,
+          relay_default_port: int = 2100):
     ca_key, ca_crt = ensure_ca(ca_dir)
     log(f"CA ready: {ca_crt} (install this cert into the system trust store)")
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -545,13 +630,17 @@ def serve(port: int, sni_allow: list, ca_dir: str, certs_dir: str, store_path: s
     srv.bind(("127.0.0.1", port))
     srv.listen(64)
     log(f"Listening on 127.0.0.1:{port}, intercepting SNI {sni_allow}")
+    if game_relay_port:
+        threading.Thread(target=serve_game,
+                         args=(game_relay_port, relay_target_file, relay_default_port),
+                         daemon=True, name="game-relay").start()
     try:
         while True:
             conn, _ = srv.accept()
             threading.Thread(
                 target=handle_client,
                 args=(conn, sni_allow, ca_key, ca_crt, certs_dir, store_path,
-                      upstream_cafile, blocklist_path),
+                      upstream_cafile, blocklist_path, forge_join_checks),
                 daemon=True,
             ).start()
     except KeyboardInterrupt:
@@ -572,9 +661,21 @@ def main():
                     help="extra CA bundle for verifying upstream (testing only)")
     ap.add_argument("--blocklist", default=None,
                     help="JSON list file of game IDs whose lobby HTTPS must fail")
+    ap.add_argument("--forge-join-checks", dest="forge_join_checks",
+                    action=argparse.BooleanOptionalAction, default=True,
+                    help="answer lobby join checks locally with pass:true "
+                         "(password + bot approval still gate entry)")
+    ap.add_argument("--game-relay-port", type=int, default=None,
+                    help="listen port for the game TCP relay (player joins "
+                         "arrive as loopback, bypassing lobby join checks)")
+    ap.add_argument("--relay-target-file", default=None,
+                    help="file holding the current gameport (written by the bot)")
+    ap.add_argument("--relay-default-port", type=int, default=2100)
     args = ap.parse_args()
     serve(args.port, [s.strip() for s in args.sni.split(",") if s.strip()],
-          args.ca, args.certs, args.tokens, args.upstream_cafile, args.blocklist)
+          args.ca, args.certs, args.tokens, args.upstream_cafile, args.blocklist,
+          args.forge_join_checks, args.game_relay_port, args.relay_target_file,
+          args.relay_default_port)
 
 
 if __name__ == "__main__":

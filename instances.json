@@ -76,6 +76,8 @@
   "wz_binary": "",
   "lobby_token_store": "",
   "lobby_blocklist": "",
+  "relay_port": 2200,
+  "relay_target_file": "",
   "migration_drain_seconds": 600,
   "migration_name_suffix": " 2",
   "max_live_sessions": 2,

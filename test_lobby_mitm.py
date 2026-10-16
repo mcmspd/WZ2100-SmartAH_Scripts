@@ -119,25 +119,26 @@ class DeleteTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_OPENSSL, "openssl CLI required")
+def _free_port() -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _mkcert(d, cn):
+    key = os.path.join(d, f"{cn}.key")
+    crt = os.path.join(d, f"{cn}.crt")
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", key, "-out", crt, "-days", "2",
+                    "-subj", f"/CN={cn}", "-addext", f"subjectAltName=DNS:{cn}"],
+                   check=True, capture_output=True)
+    return crt, key
+
+
 class LoopbackProxyTests(unittest.TestCase):
     """Real TLS through the proxy: forged cert accepted, token captured."""
-
-    @staticmethod
-    def _free_port() -> int:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-        s.close()
-        return port
-
-    def _mkcert(self, d, cn):
-        key = os.path.join(d, f"{cn}.key")
-        crt = os.path.join(d, f"{cn}.crt")
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                        "-keyout", key, "-out", crt, "-days", "2",
-                        "-subj", f"/CN={cn}", "-addext", f"subjectAltName=DNS:{cn}"],
-                       check=True, capture_output=True)
-        return crt, key
 
     def test_intercept_and_capture(self):
         tmp = tempfile.mkdtemp()
@@ -147,7 +148,7 @@ class LoopbackProxyTests(unittest.TestCase):
             store = os.path.join(tmp, "tokens.json")
 
             # Fake upstream lobby: serves canned create-response over TLS.
-            up_crt, up_key = self._mkcert(tmp, "upstream.test")
+            up_crt, up_key = _mkcert(tmp, "upstream.test")
             up_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             up_ctx.load_cert_chain(up_crt, up_key)
             up_srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -187,7 +188,7 @@ class LoopbackProxyTests(unittest.TestCase):
             threading.Thread(target=upstream, daemon=True).start()
 
             # Proxy under test (trust the fake upstream's self-signed cert).
-            proxy_port = self._free_port()
+            proxy_port = _free_port()
             threading.Thread(target=mitm.serve,
                              args=(proxy_port, ["upstream.test"], ca_dir, certs_dir, store,
                                    os.path.join(tmp, "upstream.test.crt")),
@@ -277,3 +278,176 @@ class DeleteGoneTests(unittest.TestCase):
             ok, detail = mitm.delete_lobby_listing("g", "tok")
         self.assertTrue(ok)
         self.assertIn("slot free", detail)
+
+class GameRelayTests(unittest.TestCase):
+    def test_splice_and_target_file(self):
+        import socket
+        import threading
+        received = []
+
+        echo = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        echo.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        echo.bind(("127.0.0.1", 0))
+        echo.listen(1)
+        echo_port = echo.getsockname()[1]
+
+        def echo_loop():
+            conn, _ = echo.accept()
+            try:
+                while True:
+                    data = conn.recv(4096)
+                    if not data:
+                        break
+                    received.append(data)
+                    conn.sendall(data)
+            finally:
+                conn.close()
+
+        threading.Thread(target=echo_loop, daemon=True).start()
+        relay = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        relay.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        relay.bind(("127.0.0.1", 0))
+        relay.listen(5)
+        relay_port = relay.getsockname()[1]
+
+        def accept_one():
+            conn, _ = relay.accept()
+            mitm.handle_game_client(conn, None, echo_port)
+
+        threading.Thread(target=accept_one, daemon=True).start()
+        c = socket.create_connection(("127.0.0.1", relay_port), timeout=5)
+        c.sendall(b"ping-relay")
+        self.assertEqual(c.recv(4096), b"ping-relay")
+        c.close()
+        echo.close()
+        relay.close()
+        self.assertEqual(b"".join(received), b"ping-relay")
+
+    def test_target_file_routing(self):
+        import tempfile
+        tmp = tempfile.mkdtemp()
+        try:
+            target = os.path.join(tmp, "target")
+            open(target, "w").write("2345\n")
+            self.assertEqual(mitm.read_relay_target(target, 2100), 2345)
+            self.assertEqual(mitm.read_relay_target(os.path.join(tmp, "missing"), 2100), 2100)
+            self.assertEqual(mitm.read_relay_target(None, 2100), 2100)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_closed_when_no_target(self):
+        import socket
+        import threading
+        relay = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        relay.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        relay.bind(("127.0.0.1", 0))
+        relay.listen(5)
+        relay_port = relay.getsockname()[1]
+
+        def accept_one():
+            conn, _ = relay.accept()
+            mitm.handle_game_client(conn, "/nonexistent-target-file-xyz", None)
+
+        threading.Thread(target=accept_one, daemon=True).start()
+        c = socket.create_connection(("127.0.0.1", relay_port), timeout=5)
+        c.settimeout(5)
+        self.assertEqual(c.recv(4096), b"")
+        c.close()
+        relay.close()
+
+
+class ForgeTests(unittest.TestCase):
+    def test_forge_response_shape(self):
+        import json as _json
+        # The canned body must parse as CheckJoinRequestResult {pass, error}.
+        body = b'{"pass": true}'
+        o = _json.loads(body)
+        self.assertTrue(o["pass"] is True)
+
+    def test_forge_intercepts_check_request(self):
+        import socket
+        import ssl
+        import subprocess
+        import threading
+        import time
+        import tempfile
+        import json as _json
+        tmp = tempfile.mkdtemp()
+        try:
+            ca_dir = os.path.join(tmp, "ca")
+            certs_dir = os.path.join(tmp, "certs")
+            store = os.path.join(tmp, "tokens.json")
+            up_seen = []
+
+            up_crt, up_key = _mkcert(tmp, "forge.test")
+            up_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            up_ctx.load_cert_chain(up_crt, up_key)
+            up_srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            up_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            up_srv.bind(("127.0.0.1", 0))
+            up_srv.listen(5)
+            up_port = up_srv.getsockname()[1]
+            stop = threading.Event()
+
+            def upstream():
+                up_srv.settimeout(10)
+                while not stop.is_set():
+                    try:
+                        c, _ = up_srv.accept()
+                    except socket.timeout:
+                        continue
+                    try:
+                        t = up_ctx.wrap_socket(c, server_side=True)
+                        req = b""
+                        while b"\r\n\r\n" not in req:
+                            chunk = t.recv(4096)
+                            if not chunk:
+                                break
+                            req += chunk
+                        up_seen.append(req.split(b"\r\n", 1)[0])
+                        body = b'{"pass": false, "error": "denied"}'
+                        t.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                  b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+                                  b"Connection: close\r\n\r\n" + body)
+                        t.close()
+                    except Exception:
+                        pass
+
+            threading.Thread(target=upstream, daemon=True).start()
+            proxy_port = _free_port()
+            threading.Thread(
+                target=mitm.serve, daemon=True,
+                kwargs=dict(port=proxy_port, sni_allow=["forge.test"],
+                            ca_dir=ca_dir, certs_dir=certs_dir, store_path=store,
+                            upstream_cafile=os.path.join(tmp, "forge.test.crt"),
+                            forge_join_checks=True)).start()
+            time.sleep(0.5)
+            real_get_dst = mitm.get_original_dst
+            mitm.get_original_dst = lambda conn: ("127.0.0.1", up_port)
+            try:
+                cli_ctx = ssl.create_default_context(
+                    cafile=os.path.join(ca_dir, "ca.crt"))
+                cli = cli_ctx.wrap_socket(
+                    socket.create_connection(("127.0.0.1", proxy_port)),
+                    server_hostname="forge.test")
+                body = b'{"joinToken": "x"}'
+                cli.sendall(b"POST /lobby/api/v1/game/g/check-join-request HTTP/1.1\r\n"
+                            b"Host: forge.test\r\nContent-Length: " + str(len(body)).encode() + b"\r\n"
+                            b"Connection: close\r\n\r\n" + body)
+                resp = b""
+                while True:
+                    chunk = cli.recv(4096)
+                    if not chunk:
+                        break
+                    resp += chunk
+                cli.close()
+            finally:
+                mitm.get_original_dst = real_get_dst
+            stop.set()
+            payload = resp.split(b"\r\n\r\n", 1)[1]
+            self.assertEqual(_json.loads(payload), {"pass": True})
+            # upstream must never have seen the check request (forged locally)
+            self.assertFalse(any(b"check-join-request" in r for r in up_seen),
+                             up_seen)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)

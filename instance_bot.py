@@ -80,7 +80,6 @@ stdin_ready = False
 room_state = None  # latest __WZROOMSTATUS__ data.state ("lobby"/"starting"/"started"/...)
 startup_status_event = threading.Event()
 startup_error = None
-startup_done = False  # set once lobby verification succeeds
 last_chat_log = None
 last_chat_log_time = 0.0
 current_map_name = ""
@@ -195,28 +194,6 @@ def wait_for_new_instance_ready(session_name: str, timeout: float = 60.0) -> dic
     log("WARN", f"Timed out waiting for {session_name} to verify lobby ID.")
     return None
 
-
-def blocklist_path() -> str:
-    """Shared proxy blocklist file (bot writes, proxy enforces)."""
-    return config.get("lobby_blocklist") or os.path.join(STATUS_DIR, ".lobby_blocklist.json")
-
-
-def wait_for_abandon(session_name: str, timeout: float = 150.0) -> bool:
-    """Wait until an instance reports its lobby handler gone (delisted).
-
-    Used after proxy-blocking a successor's lobby HTTPS: its PATCHes fail,
-    the handler gives up within seconds, and the instance reports
-    'delisted' while staying up with direct joins open.
-    """
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        status = read_session_status(session_name)
-        if status and status.get("status") == "delisted":
-            return True
-        if status and status.get("status") in ("failed", "exited"):
-            return False
-        time.sleep(2)
-    return False
 
 # ─── Dynamic Config & Instances ───────────────────────────────────────────────
 
@@ -419,6 +396,39 @@ def is_own_host_entry(entry: dict) -> bool:
     host_name = config.get("host_name", "")
     return bool(host_name and entry.get("name") == host_name
                 and entry.get("is_spec") and entry.get("ip") in (None, "-", ""))
+
+
+RELAY_PORT_DEFAULT = 2200  # must match the proxy --game-relay-port
+# (players arrive at WZ from 127.0.0.1: loopback joins skip lobby token
+# checks, flood throttle and IP bans — verified in upstream
+# allowNonLobbyMediatedJoin/quickRejectConnection)
+
+
+def relay_port() -> int:
+    try:
+        return int(config.get("relay_port", RELAY_PORT_DEFAULT))
+    except Exception:
+        return RELAY_PORT_DEFAULT
+
+
+def relay_target_file() -> str:
+    """File the proxy relay watches for the current gameport."""
+    return config.get("relay_target_file") or os.path.join(STATUS_DIR, ".relay_target")
+
+
+def publish_relay_target(port: int) -> bool:
+    """Point the proxy game relay at this instance's gameport."""
+    try:
+        path = relay_target_file()
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(str(int(port)))
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        log("RELAY", f"Cannot publish relay target: {e}")
+        return False
 
 
 def redirect_all_players(new_port: int) -> int:
@@ -880,57 +890,37 @@ def migrate_to_successor(new_port: int, new_session: str, new_lobby_id: str,
                           game_name: str, reason: str) -> bool:
     """Move players to a ready successor, then shut this instance down.
 
-    Primary path (seamless): proxy-block the successor's lobby HTTPS so its
-    handler abandons the listing (direct joins open up), `redirect identity`
-    everyone over, and start Python keepalives for its listing.
+    Primary path (seamless): open the localhost join relay onto the
+    successor's gameport and `redirect identity` everyone at it. Arrivals
+    come from 127.0.0.1, which stock Warzone always passes to approval
+    (loopback exemption) without consulting the lobby — the successor stays
+    fully listed the whole time, so there is no darkness and no abandon.
     Fallback path: announce the successor and wait for manual rejoin.
     Returns True when this instance should shut down afterwards.
     """
     log("MIGRATE", f"Fresh instance {new_session} ready with lobby ID {new_lobby_id}.")
     bcast(f"New instance spun up successfully: {game_name}.")
-    try:
-        lobby_mitm.block_game(blocklist_path(), new_lobby_id)
-    except Exception as e:
-        log("WARN", f"Could not write proxy blocklist ({e}); using manual-rejoin fallback.")
+    if not publish_relay_target(new_port):
+        log("WARN", "Could not publish relay target; using manual-rejoin fallback.")
         return announce_and_drain(game_name, new_port)
 
-    bcast("Cutting lobby access for the new instance so the handover can go "
-          "through (it will briefly disappear from the list)...")
-    log("MIGRATE", "Waiting for successor lobby handler to go offline (direct joins open)...")
-    if not wait_for_abandon(new_session, timeout=150.0):
-        log("WARN", "Successor did not report offline; using manual-rejoin fallback.")
-        try:
-            lobby_mitm.unblock_game(blocklist_path(), new_lobby_id)
-        except Exception:
-            pass
-        return announce_and_drain(game_name, new_port)
-
-    # Abandon confirmed. Unblock immediately: the handler is dead and will not
-    # revive, but our own management calls (redirect-time checks, keepalive
-    # PATCHes, future DELETE) must flow again. Leaving it blocked would make
-    # the proxy kill our own API calls (self-sabotage).
-    try:
-        lobby_mitm.unblock_game(blocklist_path(), new_lobby_id)
-    except Exception as e:
-        log("WARN", f"Could not unblock {new_lobby_id} ({e}); management calls may fail.")
-    bcast("New instance is now ready for joins.")
-    if not request_roster_refresh():
-        log("WARN", "No fresh roster before redirect; using last known roster.")
-    bcast(f"Redirecting you to {game_name} now - hold on, do not disconnect...")
+    public_ip = get_public_ip()
+    relay = relay_port()
+    bcast(f"Handover channel open. Moving you to {game_name} now - hold on, "
+          "do not disconnect...")
     bcast("Note: automatic handover works only once per game session. If you "
           f"have already been moved once, please rejoin {game_name} from the "
-          "lobby list manually instead.")
-    moved = redirect_all_players(new_port)
-    log("MIGRATE", f"Redirect commands issued for {moved} connection(s).")
+          "lobby list manually instead. "
+          f"(Direct: {public_ip}:{relay}.)")
+    if not request_roster_refresh():
+        log("WARN", "No fresh roster before redirect; using last known roster.")
+    moved = redirect_all_players(relay)
+    log("MIGRATE", f"Redirect commands issued for {moved} connection(s) via relay {relay}.")
     time.sleep(30)  # let clients complete the auto-follow handshake
     if lobby_has_drained():
         log("MIGRATE", "Lobby drained via redirect. Shutting down old instance.")
         return True
     log("MIGRATE", "Some players did not follow the redirect; falling back to manual rejoin.")
-    try:
-        lobby_mitm.unblock_game(blocklist_path(), new_lobby_id)
-    except Exception:
-        pass
     return announce_and_drain(game_name, new_port)
 
 
@@ -1801,12 +1791,6 @@ def process_line(line: str):
         startup_error = line[len("WZEVENT: "):].strip()
         log("ERROR", f"Lobby startup error: {startup_error}")
         startup_status_event.set()
-        # A post-ready lobbyerror means our listing is gone server-side
-        # (e.g. after proxy-block abandon or an external DELETE) while the
-        # game keeps running. Report it so migration can proceed.
-        if startup_done and lobby_id:
-            write_session_status(session_global, "delisted", port_global,
-                                 lobby_id=lobby_id, error=startup_error)
     elif line.startswith("WZEVENT:"):
         log("EVENT", line[len("WZEVENT: "):])
     elif line.startswith("WZCMD: stdinReadReady"):
@@ -2051,7 +2035,7 @@ def main():
     global process, config, greetings, log_file_handle, log_file_path, game_started, start_timeout_timer
     global port_global, session_global, quit_after_game
     global instance_start_time
-    global lobby_id, startup_error, stdin_ready, room_state, startup_done
+    global lobby_id, startup_error, stdin_ready, room_state
     global current_map_name, current_map_mods
 
     # Args: [port] [session_name] [map_name] [mods_csv] [name_suffix]
@@ -2151,7 +2135,6 @@ def main():
 
         lobby_id = None
         startup_error = None
-        startup_done = False
         stdin_ready = False
         room_state = None
         startup_status_event.clear()
@@ -2189,7 +2172,7 @@ def main():
         if verification_failure is None:
             log("INFO", f"Lobby ready after launch: id={lobby_id} port={port_global}")
             write_session_status(session_global, "ready", port_global, lobby_id=lobby_id)
-            startup_done = True
+            publish_relay_target(port_global)
             process.wait()
         else:
             if verification_failure.startswith("lobbyerror"):

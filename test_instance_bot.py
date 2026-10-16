@@ -428,21 +428,11 @@ class MigrateFlowTests(unittest.TestCase):
     def tearDown(self):
         ib.config, ib.process, ib.roster = self._old
 
-    def test_redirect_path_unblocks(self):
-        ib.roster = {}
-        with unittest.mock.patch.object(ib.lobby_mitm, "block_game"), \
-             unittest.mock.patch.object(ib.lobby_mitm, "unblock_game") as ug, \
-             unittest.mock.patch.object(ib, "wait_for_abandon", return_value=True), \
-             unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
-             unittest.mock.patch.object(ib, "redirect_all_players", return_value=1), \
-             unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
-             unittest.mock.patch.object(ib.time, "sleep", return_value=None):
-            self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G 2", "t"))
-        ug.assert_called_once_with(ib.blocklist_path(), "gid-1")
-
-    def test_redirect_path(self):
+    def test_redirect_path_via_relay(self):
         ib.roster = {"P1": {"type": "player", "name": "Ann", "pos": 0, "idx": 0,
                             "is_spec": False, "ip": "1.1.1.1"}}
+        ib.config = {"game_name": "G", "migration_name_suffix": " 2",
+                     "migration_drain_seconds": 600, "relay_port": 2200}
         calls = []
 
         def fake_send(cmd, log_command=True):
@@ -450,19 +440,19 @@ class MigrateFlowTests(unittest.TestCase):
             return True
 
         with unittest.mock.patch.object(ib, "send_cmd", fake_send), \
-             unittest.mock.patch.object(ib.lobby_mitm, "block_game") as bg, \
-             unittest.mock.patch.object(ib, "wait_for_abandon", return_value=True), \
+             unittest.mock.patch.object(ib, "publish_relay_target", return_value=True), \
              unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
              unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
+             unittest.mock.patch.object(ib, "get_public_ip", return_value="9.9.9.9"), \
              unittest.mock.patch.object(ib.time, "sleep", return_value=None):
-            self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G [new]", "t"))
-        bg.assert_called_once()
-        self.assertTrue(any(c.startswith("redirect identity P1 ") for c in calls))
+            self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G 2", "t"))
+        redir = [c for c in calls if c.startswith("redirect identity P1 ")]
+        self.assertEqual(len(redir), 1)
+        self.assertIn("tcp:2200:", redir[0])
 
     def test_fallback_path(self):
         ib.roster = {}
-        with unittest.mock.patch.object(ib.lobby_mitm, "block_game",
-                                        side_effect=OSError("disk full")), \
+        with unittest.mock.patch.object(ib, "publish_relay_target", return_value=False), \
              unittest.mock.patch.object(ib, "announce_and_drain",
                                         return_value=True) as ad:
             self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G [new]", "t"))
@@ -529,9 +519,8 @@ class MigrateMessagesTests(unittest.TestCase):
             return True
 
         with unittest.mock.patch.object(ib, "send_cmd", fake_send), \
-             unittest.mock.patch.object(ib.lobby_mitm, "block_game"), \
-             unittest.mock.patch.object(ib.lobby_mitm, "unblock_game"), \
-             unittest.mock.patch.object(ib, "wait_for_abandon", return_value=True), \
+             unittest.mock.patch.object(ib, "publish_relay_target", return_value=True), \
+             unittest.mock.patch.object(ib, "get_public_ip", return_value="9.9.9.9"), \
              unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
              unittest.mock.patch.object(ib, "redirect_all_players", return_value=0), \
              unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
@@ -545,8 +534,8 @@ class MigrateMessagesTests(unittest.TestCase):
 
     def test_progress_messages_in_order(self):
         text = self._run_success()
-        markers = ["spun up successfully", "Cutting lobby access",
-                   "ready for joins", "Redirecting you", "only once per game session"]
+        markers = ["spun up successfully", "Handover channel open",
+                   "only once per game session"]
         idx = -1
         for m in markers:
             self.assertIn(m, text, m)
