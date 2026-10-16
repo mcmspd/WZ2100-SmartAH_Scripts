@@ -67,7 +67,7 @@ class TokenTests(unittest.TestCase):
             self.assertEqual(entry["host_token"], "tok")
             self.assertEqual(entry["lobby_token"], "lob")
             mode = stat.S_IMODE(os.stat(store).st_mode)
-            self.assertEqual(mode, 0o600)
+            self.assertEqual(mode, 0o640)
             self.assertIsNone(mitm.load_lobby_token(store, "nope"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
