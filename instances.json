@@ -38,6 +38,7 @@
   "wz_extra_args": [],
   "wz_backend": "auto",
   "wz_binary": "",
+  "lobby_token_store": "",
   "max_live_sessions": 2,
   "min_uptime_to_respawn_seconds": 120,
   "max_restarts_per_hour": 3,

@@ -330,3 +330,60 @@ class BuildCommandTests(unittest.TestCase):
         with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_M"):
             cmd = ib.build_command("system")
         self.assertIn("--async-join-approve", cmd)
+
+class RedirectFilterTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.process)
+        ib.config = {"host_name": "FreeHost", "game_password": "2100"}
+        ib.process = None  # send_cmd no-ops (captured below)
+
+    def tearDown(self):
+        ib.config, ib.process = self._old
+
+    def test_skips_host_pseudo_slot_keeps_real_specs(self):
+        ib.roster = {}
+        sent = []
+        with unittest.mock.patch.object(ib, "send_cmd",
+                                        lambda cmd, log_command=True: sent.append(cmd) or True):
+            ib.process = unittest.mock.Mock()
+            ib.process.stdin = unittest.mock.Mock()
+            ib.redirect_all_players(2101)
+        ib.process = None
+        # roster empty -> nothing sent tested elsewhere; now with entries:
+        ib.roster = {
+            "HOSTPK": {"type": "spec", "name": "FreeHost", "pos": None, "idx": None,
+                       "is_spec": True, "ip": "-"},
+            "SPEC1": {"type": "spec", "name": "Watcher", "pos": None, "idx": None,
+                      "is_spec": True, "ip": "9.9.9.9"},
+            "P1": {"type": "player", "name": "Ann", "pos": 0, "idx": 0,
+                   "is_spec": False, "ip": "1.1.1.1"},
+        }
+        sent.clear()
+        with unittest.mock.patch.object(ib, "send_cmd",
+                                        lambda cmd, log_command=True: sent.append(cmd) or True):
+            ib.process = unittest.mock.Mock()
+            ib.process.stdin = unittest.mock.Mock()
+            n = ib.redirect_all_players(2101)
+        ib.process = None
+        self.assertEqual(n, 2)
+        joined = " ".join(sent)
+        self.assertNotIn("HOSTPK", joined)
+        self.assertIn("SPEC1", joined)
+        self.assertIn("tcp:2101:1:2100", joined)  # spec flag + password carried
+        self.assertIn("tcp:2101:0:2100", joined)
+
+class UnlistStoreTests(unittest.TestCase):
+    def test_custom_store_path_used(self):
+        ib.config = {"lobby_token_store": "/tmp/custom-tokens.json"}
+        ib.lobby_id = "gid-9"
+        try:
+            with unittest.mock.patch.object(ib, "get_wz_lobbyserver", return_value=None), \
+                 unittest.mock.patch.object(
+                    ib.lobby_mitm, "delete_listing_by_game_id",
+                    return_value=(True, "HTTP 200")) as dl:
+                self.assertTrue(ib.unlist_self_via_api())
+                dl.assert_called_once_with("gid-9", "/tmp/custom-tokens.json",
+                                           "https://wzlobby.wz2100.net/lobby", False)
+        finally:
+            ib.config = {}
+            ib.lobby_id = None

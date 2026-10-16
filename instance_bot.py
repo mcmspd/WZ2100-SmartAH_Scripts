@@ -506,9 +506,15 @@ def redirect_all_players(new_port: int) -> int:
         roster_snapshot = list(roster.items())
 
     game_pw = config.get("game_password", "")
+    host_name = config.get("host_name", "")
     count = 0
     for pk, entry in roster_snapshot:
         if not pk or pk == "-":
+            continue
+        # Skip our own spectator-host pseudo-slot (local, ip unknown).
+        # Real spectators (with a public IP) ARE redirected.
+        if (host_name and entry.get("name") == host_name
+                and entry.get("is_spec") and entry.get("ip") in (None, "-", "")):
             continue
         is_spec = 1 if entry.get("is_spec", False) else 0
         if game_pw:
@@ -536,8 +542,9 @@ def unlist_self_via_api(started: bool = False) -> bool:
         log("UNLIST", "No lobby ID known; nothing to unlist.")
         return False
     lobby_address = get_wz_lobbyserver() or config.get("lobby_address", "https://wzlobby.wz2100.net/lobby")
+    store_path = config.get("lobby_token_store") or lobby_mitm.TOKEN_STORE_DEFAULT
     ok, detail = lobby_mitm.delete_listing_by_game_id(
-        lobby_id, lobby_mitm.TOKEN_STORE_DEFAULT, lobby_address, started)
+        lobby_id, store_path, lobby_address, started)
     log("UNLIST", f"DELETE {lobby_id}: {detail}")
     if not ok and "no captured hostToken" in detail:
         log("UNLIST", "Hint: run lobby_mitm.py and steer this UID's 443 via lobby_off.sh.")
