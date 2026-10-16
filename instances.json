@@ -19,6 +19,25 @@
     "By staying in this host, you agree to the above terms."
   ],
   "map_name": "NTW_3v3Full",
+  "maps": [
+    {"name": "NTW_3v3Full", "mods": []},
+    {"name": "NTW_4x4_Full", "mods": []},
+    {"name": "NTW_5v5Full_RQ", "mods": []},
+    {"name": "NTW-Full2v2", "mods": []},
+    {"name": "Opa-Shtorm-A-FB", "mods": []},
+    {"name": "RO_1v1Full", "mods": []}
+  ],
+  "wz_headless": true,
+  "wz_nosound": true,
+  "wz_debug_flags": ["WZ", "NET", "SCRIPT", "MOVEMENT", "ATTACK", "SYNC", "RESEARCH", "LOBBY"],
+  "wz_host_connection_provider": "tcp",
+  "wz_portmapping": false,
+  "wz_async_join_approve": true,
+  "wz_enable_lobby_slashcmd": false,
+  "wz_extra_args": [],
+  "max_live_sessions": 2,
+  "min_uptime_to_respawn_seconds": 120,
+  "max_restarts_per_hour": 3,
   "authorized_pkeys": [
     "8MDd59x68B5Q7HM51s5rwxH5U4q6RW/+g+80cwOqPrI=",
     "MCBF7QzQMsmVUXKFHL4rNXLo9dX8znqv39AclP9JJ/g=",
