@@ -305,3 +305,15 @@ class StorePermsTests(unittest.TestCase):
             self.assertEqual(mitm.load_lobby_token(store, "g1")["host_token"], "tok-1")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+class DeleteGoneTests(unittest.TestCase):
+    def test_404_counts_as_freed(self):
+        import urllib.request
+        import urllib.error
+        err = urllib.error.HTTPError(
+            "u", 404, "not found", {},
+            __import__("io").BytesIO(b'{"code":"GAME_NOT_FOUND"}'))
+        with unittest.mock.patch.object(urllib.request, "urlopen", side_effect=err):
+            ok, detail = mitm.delete_lobby_listing("g", "tok")
+        self.assertTrue(ok)
+        self.assertIn("slot free", detail)

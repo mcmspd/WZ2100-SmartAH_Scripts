@@ -233,6 +233,38 @@ def find_available_port(start_port: int, exclude_port: int = None) -> int | None
     return None
 
 
+def reap_dead_sessions() -> int:
+    """Kill WZ_* tmux sessions whose bot process is gone. Returns reaped count."""
+    reaped = 0
+    try:
+        result = subprocess.run(
+            ["tmux", "ls", "-F", "#{session_name}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return 0
+        sessions = [l.strip() for l in result.stdout.splitlines()
+                    if l.strip().startswith("WZ_")]
+    except Exception:
+        return 0
+    for sess in sessions:
+        try:
+            check = subprocess.run(
+                ["pgrep", "-f", f"instance_bot.py.*{sess}"],
+                capture_output=True, timeout=5,
+            )
+            if check.returncode != 0:
+                subprocess.run(["tmux", "kill-session", "-t", sess],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=10)
+                clear_session_status(sess)
+                log("SPAWN", f"Reaped dead session {sess}.")
+                reaped += 1
+        except Exception:
+            pass
+    return reaped
+
+
 def count_live_sessions() -> int:
     """Count live WZ_* tmux sessions. Returns 0 when tmux is unavailable."""
     try:
@@ -519,6 +551,7 @@ def spawn_new_instance(map_name: str, mods: list | None = None,
     """
     global port_global
     prune_stale_status_files()
+    reap_dead_sessions()
     cap = int(config.get("max_live_sessions", MAX_LIVE_SESSIONS))
     live = count_live_sessions()
     if live >= cap:

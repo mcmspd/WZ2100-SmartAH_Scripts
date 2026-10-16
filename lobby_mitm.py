@@ -329,6 +329,9 @@ def delete_lobby_listing(game_id: str, host_token: str,
             body = e.read().decode("utf-8", errors="replace")[:300]
         except Exception:
             body = ""
+        # 404/GAME_NOT_FOUND means the slot is already free — that is the goal.
+        if e.code == 404 or "GAME_NOT_FOUND" in body:
+            return (True, f"HTTP {e.code} (already gone; slot free)")
         return (False, f"HTTP {e.code} {body}")
     except Exception as e:
         return (False, f"{type(e).__name__}: {e}")

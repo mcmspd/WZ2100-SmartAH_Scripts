@@ -468,3 +468,25 @@ class RateLimitTests(unittest.TestCase):
     def test_wait_none_on_timeout(self):
         with unittest.mock.patch.object(ib, "read_session_status", return_value=None):
             self.assertIsNone(ib.wait_for_new_instance_ready("S", timeout=1))
+
+class ReapTests(unittest.TestCase):
+    def test_reaps_dead_only(self):
+        import subprocess as _sp
+        killed = []
+
+        def fake_run(cmd, **kw):
+            m = unittest.mock.Mock()
+            if cmd[:2] == ["tmux", "ls"]:
+                m.returncode = 0
+                m.stdout = "WZ_OLD\nWZ_LIVE\nOTHER\n"
+            elif cmd[0] == "pgrep":
+                m.returncode = 0 if "WZ_LIVE" in cmd[-1] else 1
+            elif cmd[:2] == ["tmux", "kill-session"]:
+                killed.append(cmd[-1])
+                m.returncode = 0
+            return m
+
+        with unittest.mock.patch.object(_sp, "run", fake_run):
+            with unittest.mock.patch.object(ib, "clear_session_status"):
+                self.assertEqual(ib.reap_dead_sessions(), 1)
+        self.assertEqual(killed, ["WZ_OLD"])
