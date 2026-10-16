@@ -292,3 +292,16 @@ class KeepaliveTests(unittest.TestCase):
             ok, detail = mitm.patch_lobby_keepalive("g1", "tok")
         self.assertFalse(ok)
         self.assertIn("gone=True", detail)
+
+class StorePermsTests(unittest.TestCase):
+    def test_store_is_group_readable(self):
+        import stat as _stat
+        tmp = tempfile.mkdtemp()
+        try:
+            store = os.path.join(tmp, "t.json")
+            mitm.store_token(store, "g1", "tok-1", None)
+            mode = _stat.S_IMODE(os.stat(store).st_mode)
+            self.assertEqual(mode, 0o640)
+            self.assertEqual(mitm.load_lobby_token(store, "g1")["host_token"], "tok-1")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)

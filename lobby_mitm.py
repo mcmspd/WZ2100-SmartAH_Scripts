@@ -222,10 +222,12 @@ def store_token(store_path: str, game_id: str, host_token: str, lobby_token: str
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
             f.write("\n")
-        os.chmod(tmp, 0o600)
+        # 0640 + setgid shared group dir: both bot and proxy users keep access
+        # across atomic replaces (0600 would lock out whoever didn't write it).
+        os.chmod(tmp, 0o640)
         os.replace(tmp, store_path)
         try:
-            os.chmod(store_path, 0o600)
+            os.chmod(store_path, 0o640)
         except Exception:
             pass
         log(f"Captured hostToken for game {game_id}")
