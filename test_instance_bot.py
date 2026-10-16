@@ -225,10 +225,6 @@ class RestartCapTests(unittest.TestCase):
             self.assertFalse(ib.record_restart_and_check_cap())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class UnlistTests(unittest.TestCase):
     def setUp(self):
         self._old_config = ib.config
@@ -778,3 +774,95 @@ class TemplateTests(unittest.TestCase):
             f.write("{not json")
         ah, cfg = self._gen()
         self.assertTrue(ah)
+
+
+class MigrationClaimTests(unittest.TestCase):
+    def setUp(self):
+        with ib.migration_lock:
+            ib.map_change_in_progress = False
+
+    def tearDown(self):
+        with ib.migration_lock:
+            ib.map_change_in_progress = False
+
+    def test_claim_is_single_flight(self):
+        self.assertTrue(ib._try_claim_migration())
+        self.assertFalse(ib._try_claim_migration())
+        ib._release_migration_claim()
+        self.assertTrue(ib._try_claim_migration())
+        ib._release_migration_claim()
+
+    def test_timeout_skipped_when_claim_held(self):
+        ib.map_change_in_progress = True
+        ib.game_started = False
+        ib.process = mock.Mock()
+        ib.process.poll.return_value = None  # running
+        with mock.patch.object(ib, "spawn_new_instance") as spawn:
+            ib._start_timeout_expired()
+            spawn.assert_not_called()
+        ib.process = None
+
+
+class ExtraArgsTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.port_global, ib.session_global,
+                     ib.current_map_name, ib.current_map_mods)
+
+    def tearDown(self):
+        (ib.config, ib.port_global, ib.session_global,
+         ib.current_map_name, ib.current_map_mods) = self._old
+
+    def _cmd(self, extras):
+        ib.config = {"map_name": "M", "host_name": "H", "game_name": "G",
+                     "wz_headless": True, "wz_nosound": True,
+                     "wz_debug_flags": [], "wz_extra_args": extras}
+        ib.port_global = 2110
+        ib.session_global = "S"
+        ib.current_map_name = "M"
+        ib.current_map_mods = []
+        with mock.patch.object(wz, "generate_configs", return_value="AH_M"):
+            return ib.build_command("system")
+
+    def test_bot_managed_flags_rejected(self):
+        cmd = self._cmd(["--gameport=9999", "--configdir=/tmp/x",
+                         "--autohost=Y", "--enablecmdinterface=socket",
+                         "--mod_mp=evil.wz"])
+        self.assertNotIn("--gameport=9999", cmd)
+        self.assertIn("--gameport=2110", cmd)
+        self.assertFalse(any(a.startswith("--mod_mp=evil") for a in cmd))
+
+    def test_duplicate_keys_rejected(self):
+        cmd = self._cmd(["--headless", "--portmapping=false", "--foo=1", "--foo=2"])
+        self.assertEqual(cmd.count("--headless"), 1)
+        self.assertEqual([a for a in cmd if a.startswith("--foo=")], ["--foo=1"])
+
+    def test_allowed_extra_passes(self):
+        cmd = self._cmd(["--foo=1"])
+        self.assertIn("--foo=1", cmd)
+
+
+class SavePkeysLockTests(unittest.TestCase):
+    def test_lockfile_serializes_and_preserves(self):
+        import json as _json
+        import tempfile
+        import shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            cfg = os.path.join(tmp, "instances.json")
+            with open(cfg, "w") as f:
+                _json.dump({"game_name": "G", "authorized_pkeys": ["old"]}, f)
+            with mock.patch.object(ib, "CONFIG_FILE", cfg), \
+                 mock.patch.object(ib, "CONFIG_LOCK_FILE", cfg + ".lock"):
+                ib.config = {"authorized_pkeys": ["a", "b"]}
+                ib.save_authorized_pkeys()
+                data = _json.load(open(cfg))
+                self.assertEqual(data["authorized_pkeys"], ["a", "b"])
+                self.assertEqual(data["game_name"], "G")
+                self.assertTrue(os.path.exists(cfg + ".lock"))
+        finally:
+            ib.config = {}
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -76,7 +76,8 @@ automatically from `mods/`.
    itself.
 3. `sudo ./lobby_off.sh <wz-user> [port]` steers that UID's port 443 into
    the proxy; `sudo ./lobby_on.sh` restores direct access.
-4. Tokens land in `instance_configs/.lobby_tokens.json` (0600);
+4. Tokens land in `instance_configs/.lobby_tokens.json` (0640, shared group
+   so bot and proxy users both keep access across atomic replaces);
    `unlist_self_via_api()` / admin `/unlobby` uses them.
 
 Constraints learned live: flatpak WZ ignores the host CA store — MITM'd

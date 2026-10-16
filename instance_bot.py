@@ -16,6 +16,7 @@ import json
 import lobby_mitm
 import wz_config
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -112,12 +113,32 @@ start_timeout_lock = threading.Lock()
 
 # Single-flight migration lock shared by timeout and map-change migrations.
 # (map_change_lock is kept as an alias so external behaviour is unchanged.)
+# The lock guards only short critical sections (claim/release + attempt
+# counters). The long spawn/wait/drain work runs WITHOUT the lock held;
+# single-flight during that window is enforced by map_change_in_progress.
 migration_lock = threading.RLock()
 map_change_lock = migration_lock
 map_change_in_progress = False
 
 # Number of consecutive failed migration attempts (for backoff). Guarded by migration_lock.
 migration_attempts = 0
+
+
+def _try_claim_migration() -> bool:
+    """Atomically claim the single migration slot. Returns False if busy."""
+    with migration_lock:
+        global map_change_in_progress
+        if map_change_in_progress:
+            return False
+        map_change_in_progress = True
+        return True
+
+
+def _release_migration_claim():
+    """Release the migration slot claimed by _try_claim_migration."""
+    with migration_lock:
+        global map_change_in_progress
+        map_change_in_progress = False
 
 STATUS_DIR = os.path.join(SCRIPT_DIR, "instance_configs")
 
@@ -579,24 +600,31 @@ _public_ip_cache = {"value": None, "at": 0.0}
 _public_ip_lock = threading.Lock()
 
 def get_public_ip() -> str:
-    """Return the machine's public IP address via curl ifconfig.me (cached)."""
+    """Return the machine's public IP address (cached).
+
+    Tries several plain-text providers in order; the first non-empty
+    response wins. Result is cached for PUBLIC_IP_TTL seconds.
+    """
     with _public_ip_lock:
         if _public_ip_cache["value"] and time.time() - _public_ip_cache["at"] < PUBLIC_IP_TTL:
             return _public_ip_cache["value"]
-    try:
-        result = subprocess.run(
-            ["curl", "-s", "--max-time", "5", "ifconfig.me"],
-            capture_output=True, text=True
-        )
-        ip = result.stdout.strip()
-        if ip:
-            with _public_ip_lock:
-                _public_ip_cache["value"] = ip
-                _public_ip_cache["at"] = time.time()
-            return ip
-        return "N/A"
-    except Exception:
-        return "N/A"
+    providers = (
+        ["curl", "-s", "--max-time", "5", "ifconfig.me"],
+        ["curl", "-s", "--max-time", "5", "https://api.ipify.org"],
+        ["curl", "-s", "--max-time", "5", "https://icanhazip.com"],
+    )
+    for cmd in providers:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            ip = result.stdout.strip().split()[0] if result.stdout.strip() else ""
+            if ip and re.fullmatch(r"[0-9a-fA-F.:]+", ip):
+                with _public_ip_lock:
+                    _public_ip_cache["value"] = ip
+                    _public_ip_cache["at"] = time.time()
+                return ip
+        except Exception:
+            continue
+    return "N/A"
 
 
 def get_session_remaining() -> str:
@@ -620,32 +648,41 @@ except ImportError:  # Windows / minimal builds
     fcntl = None
 
 _config_write_lock = threading.Lock()
+CONFIG_LOCK_FILE = CONFIG_FILE + ".lock"
 
 def save_authorized_pkeys():
-    """Persist the current authorized_pkeys list back to instances.json (locked)."""
+    """Persist the current authorized_pkeys list back to instances.json.
+
+    Serialized across processes with a dedicated lockfile held across the
+    whole read-modify-write, plus the in-process thread lock.
+    """
     with _config_write_lock:
+        lock_fd = None
         try:
+            lock_fd = os.open(CONFIG_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o644)
+            if fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
             with open(CONFIG_FILE, "r") as f:
-                if fcntl is not None:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
                 data = json.load(f)
-                if fcntl is not None:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             data["authorized_pkeys"] = config.get("authorized_pkeys", [])
             tmp = CONFIG_FILE + ".tmp"
             with open(tmp, "w") as f:
-                if fcntl is not None:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 json.dump(data, f, indent=2)
                 f.write("\n")
                 f.flush()
                 os.fsync(f.fileno())
-                if fcntl is not None:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             os.replace(tmp, CONFIG_FILE)
             log("ADMIN", "authorized_pkeys saved to instances.json")
         except Exception as e:
             log("WARN", f"Failed to save authorized_pkeys: {e}")
+        finally:
+            if lock_fd is not None:
+                try:
+                    if fcntl is not None:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    os.close(lock_fd)
+                except Exception:
+                    pass
 
 
 # ─── Shared Utilities ─────────────────────────────────────────────────────────
@@ -847,7 +884,12 @@ def bcast(msg: str):
 
 
 def dm(pk: str, msg: str):
-    """Send a private system message to one player by their pk."""
+    """Send a private system message to one player by identity.
+
+    Upstream accepts either the b64 public key or the public hash here
+    (see checkPlayerIdentityMatchesString in src/stdinreader.cpp); the
+    roster pk is used because it is stable once known.
+    """
     send_cmd(f"chat direct {pk} {msg}")
 
 # ─── Start-Timeout Auto-Restart ───────────────────────────────────────────────
@@ -952,10 +994,10 @@ def _start_timeout_expired():
             return
         if process is None or process.poll() is not None:
             return
-    if not migration_lock.acquire(blocking=False):
+    if not _try_claim_migration():
         log("TIMEOUT", "Another migration is in progress. Skipping timeout migration.")
         return
-    acquired = True
+    succeeded = False
     try:
         with migration_lock:
             if migration_attempts >= MIGRATION_MAX_ATTEMPTS:
@@ -984,6 +1026,8 @@ def _start_timeout_expired():
                 migration_attempts += 1
             return
         new_port, new_session = spawned
+        # Long waits below run WITHOUT migration_lock held; the claim flag
+        # keeps other migrations out until this one finishes.
         status = wait_for_new_instance_ready(new_session, timeout=60.0)
         with start_timeout_lock:
             if game_started or process is None or process.poll() is not None:
@@ -997,6 +1041,7 @@ def _start_timeout_expired():
             with migration_lock:
                 migration_attempts = 0
             quit_after_game = True
+            succeeded = True
             if process:
                 try:
                     send_cmd("shutdown now")
@@ -1022,11 +1067,10 @@ def _start_timeout_expired():
                     log("TIMEOUT", f"Retrying migration in {int(delay)}s (attempt {attempts + 1}).")
                     arm_start_timeout(delay)
     finally:
-        if acquired:
-            try:
-                migration_lock.release()
-            except Exception:
-                pass
+        # On success the old instance shuts down; keep the claim held so no
+        # second migration can start before shutdown completes.
+        if not succeeded:
+            _release_migration_claim()
 
 def _vote_timed_out():
     """Called when the 60-second voting window expires."""
@@ -1299,6 +1343,8 @@ def on_player_join(line: str):
     Handle: WZEVENT: player join: <slot> <b64pubkey> <hash> <ip> <b64name>
     Sends greeting lines to the joining player.
     Note: Roster is now maintained via __WZROOMSTATUS__.
+    The join-time hash is used here (not the roster pk) because the roster
+    may not have refreshed yet; upstream accepts either identity form.
     """
     content = line[len("WZEVENT: player join: "):].strip()
     parts   = content.split(" ")
@@ -1418,13 +1464,10 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
                 dm(sender_pk, "You are not authorized to change the map.")
             return
 
-        with map_change_lock:
-            global map_change_in_progress
-            if map_change_in_progress:
-                if sender_pk:
-                    dm(sender_pk, "A map change is already in progress.")
-                return
-            map_change_in_progress = True
+        if not _try_claim_migration():
+            if sender_pk:
+                dm(sender_pk, "A migration is already in progress.")
+            return
 
         maps = get_available_maps()
         try:
@@ -1432,15 +1475,13 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
             if map_index < 0 or map_index >= len(maps):
                 if sender_pk:
                     dm(sender_pk, f"Invalid map index. Use 1 to {len(maps)}.")
-                with map_change_lock:
-                    map_change_in_progress = False
+                _release_migration_claim()
                 return
             new_map = maps[map_index]
         except ValueError:
             if sender_pk:
                 dm(sender_pk, "Please provide a valid map index. Usage: /maps <index>")
-            with map_change_lock:
-                map_change_in_progress = False
+            _release_migration_claim()
             return
 
         entry = wz_config.get_map_entry(config.get("maps"), new_map)
@@ -1451,46 +1492,38 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
             if sender_pk:
                 dm(sender_pk, f"Migration aborted: lobby name {successor_name!r} not acceptable.")
             log("ERROR", f"Successor lobby name {successor_name!r} has unsafe characters; aborting map change.")
-            with map_change_lock:
-                map_change_in_progress = False
+            _release_migration_claim()
             return
         bcast(f"Map change to {new_map}{mod_note} requested by {sender_name}. Spinning up new instance, this usually takes about 60 seconds...")
 
         def _handle_map_change(map_to_load: str, mods_to_load: list):
-            global quit_after_game, map_change_in_progress, migration_attempts
+            global quit_after_game, migration_attempts
+            succeeded = False
             try:
                 if not unlist_self_via_api():
                     log("WARN", "Aborting map change: lobby slot still held and no token to free it.")
                     bcast("Map change aborted: could not free the lobby slot.")
-                    with map_change_lock:
-                        map_change_in_progress = False
                     return
                 spawned = spawn_new_instance(map_to_load, mods_to_load,
                                              name_suffix=config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX))
                 if spawned is None:
                     bcast("Map change failed: could not launch a new lobby (cap reached or no free port).")
-                    with map_change_lock:
-                        map_change_in_progress = False
                     return
                 new_port, new_session = spawned
                 status = wait_for_new_instance_ready(new_session, timeout=60.0)
                 with start_timeout_lock:
                     if game_started or process is None or process.poll() is not None:
                         log("MIGRATE", "Game started or process ended while waiting for new map instance. Cancelling map change.")
-                        with map_change_lock:
-                            map_change_in_progress = False
                         return
                 if status and status.get("lobby_id"):
                     new_lobby_id = status["lobby_id"]
                     game_name = config.get("game_name", "") + config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX)
                     if not migrate_to_successor(new_port, new_session, new_lobby_id, game_name, "map-change"):
-                        with map_change_lock:
-                            map_change_in_progress = False
                         return
                     quit_after_game = True
-                    with map_change_lock:
-                        map_change_in_progress = False
+                    with migration_lock:
                         migration_attempts = 0
+                    succeeded = True
                     send_cmd("shutdown now")
                 else:
                     err = status.get("error") if status else "no response from new instance"
@@ -1499,12 +1532,13 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
                         bcast("Map change failed: lobby is rate-limiting us. Wait ~20 minutes before retrying.")
                     else:
                         bcast(f"Map change failed: new lobby could not be verified. Remaining on {current_map_name or config.get('map_name')}.")
-                    with map_change_lock:
-                        map_change_in_progress = False
             except Exception as e:
                 log("WARN", f"Error during map change migration: {e}")
-                with map_change_lock:
-                    map_change_in_progress = False
+            finally:
+                # On success the old instance shuts down; keep the claim held
+                # so no second migration can start before shutdown completes.
+                if not succeeded:
+                    _release_migration_claim()
 
         threading.Thread(target=_handle_map_change, args=(new_map, new_mods), daemon=True).start()
         return
@@ -1831,11 +1865,23 @@ def output_reader(proc: subprocess.Popen):
     """
     Background thread: read combined stdout+stderr from the game as raw bytes.
     Decodes line-by-line with error tolerance and routes each line.
+    Uses select() with a short timeout where available so shutdown does not
+    block indefinitely on a silent pipe; falls back to blocking reads.
     """
     # Read raw bytes to avoid text-mode buffering/encoding issues
     buf = b""
+    use_select = hasattr(select, "select")
     while True:
         try:
+            if use_select:
+                try:
+                    r, _, _ = select.select([proc.stdout], [], [], 1.0)
+                    if not r:
+                        if proc.poll() is not None:
+                            break
+                        continue
+                except Exception:
+                    use_select = False  # fall back to blocking reads
             chunk = proc.stdout.read(4096)
             if not chunk:
                 break
@@ -1987,10 +2033,23 @@ def build_command(wz_install: str) -> list:
     for mod in mods:
         # Exact staged filename (regular file check upstream).
         common_args.append(f"--mod_mp={mod}.wz")
+    # Bot-managed flags must not be overridable via wz_extra_args: a second
+    # --gameport/--configdir/--autohost would leave WZ and the bot disagreeing
+    # about ports/paths, and --enablecmdinterface is the bot's lifeline.
+    forbidden_prefixes = ("--gameport", "--configdir", "--autohost",
+                          "--enablecmdinterface", "--mod_mp")
+    used_keys = {a.split("=", 1)[0].split(" ", 1)[0] for a in common_args}
     for extra in config.get("wz_extra_args", []):
         if isinstance(extra, str) and extra.startswith("--") and "\n" not in extra:
-            if extra not in common_args:
-                common_args.append(extra)
+            key = extra.split("=", 1)[0].split(" ", 1)[0]
+            if any(key == p or key.startswith(p + ".") for p in forbidden_prefixes):
+                log("WARN", f"Ignoring bot-managed wz_extra_args entry: {extra!r}")
+                continue
+            if extra in common_args or key in used_keys:
+                log("WARN", f"Ignoring duplicate wz_extra_args entry: {extra!r}")
+                continue
+            common_args.append(extra)
+            used_keys.add(key)
         else:
             log("WARN", f"Ignoring unsafe wz_extra_args entry: {extra!r}")
 
@@ -2043,6 +2102,9 @@ def main():
     if len(sys.argv) > 1:
         port_global = int(sys.argv[1])
     else:
+        # Standalone fallback: find_available_port probes localhost, so ports
+        # already bound by live instances are skipped. A TOCTOU race with a
+        # concurrent spawner remains; the readiness port probe catches it.
         port_global = find_available_port(2100)
         if port_global is None:
             print("[ERROR] No free game port in range 2100-2110.")

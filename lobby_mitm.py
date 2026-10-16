@@ -32,11 +32,13 @@ import datetime
 import json
 import os
 import re
+import select
 import socket
 import struct
 import subprocess
 import sys
 import threading
+import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -473,19 +475,38 @@ def handle_client(client: socket.socket, sni_allow: list, ca_key: str, ca_crt: s
         client.settimeout(15)
         orig_dst = get_original_dst(client)
         # Peek (not consume) so the real socket can be handed to TLS below.
+        # Fragmented ClientHellos arrive in pieces: wait (via select) for more
+        # bytes instead of busy-spinning on the same peeked buffer.
         data = b""
         sni = None
-        while len(data) < 65536:
+        deadline = time.time() + 5.0
+        last_len = -1
+        while len(data) < 65536 and time.time() < deadline:
+            try:
+                r, _, _ = select.select([client], [], [], 0.2)
+            except Exception:
+                break
+            if not r:
+                if data and data[:1] != b"\x16":
+                    break  # got a complete non-TLS header; no more to wait for
+                continue
             try:
                 peeked = client.recv(16384, socket.MSG_PEEK)
             except Exception:
                 break
             if not peeked:
                 break
+            if len(peeked) == last_len:
+                # No new bytes yet (e.g. fragmented ClientHello still in
+                # flight): pause briefly, keep waiting until the deadline.
+                time.sleep(0.05)
+                continue
+            last_len = len(peeked)
             data = peeked
             sni = extract_sni(data)
             if sni is not None or (data and data[0] != 0x16):
                 break
+            # Incomplete TLS record: loop and wait for the rest.
         if sni and sni in sni_allow:
             handle_intercepted(client, sni, orig_dst, ca_key, ca_crt, certs_dir, store_path,
                                  upstream_cafile, blocklist_path, forge_join_checks)

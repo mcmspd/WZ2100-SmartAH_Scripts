@@ -1,4 +1,9 @@
-"""Bisect lobby game-name validation with sacrificial listings."""
+"""Bisect lobby game-name validation with sacrificial listings.
+
+Usage: python3 nametest.py "Name A" "Name B" ...
+Spaced ≥3 min apart by default (NAMETEST_PAUSE); each LISTED name is
+immediately DELETE'd so the one-per-IP slot stays free.
+"""
 import os
 import re
 import shutil
@@ -7,8 +12,12 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, "/home/wzbot/WZ")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
 os.chdir("/tmp")
+
+import wz_config as wz
+
 import instance_bot as ib
 
 ib.config = {"host_name": "FreeHost", "game_name": "FreeHost",
@@ -23,15 +32,29 @@ ib.config = {"host_name": "FreeHost", "game_name": "FreeHost",
 ib.current_map_mods = []
 ib.port_global = 2110
 
+MAPS_DIR = os.path.join(SCRIPT_DIR, "maps")
+MODS_DIR = os.path.join(SCRIPT_DIR, "mods")
+AUTOHOST_DIR = os.path.join(SCRIPT_DIR, "autohost")
+MAP_UNDER_TEST = os.environ.get("NAMETEST_MAP", "NTW_3v3Full")
+TOKEN_STORE = os.environ.get(
+    "NAMETEST_TOKEN_STORE",
+    os.path.join(SCRIPT_DIR, "instance_configs", ".lobby_tokens.json"))
+WZ_BINARY = os.environ.get("NAMETEST_WZ_BINARY", "/usr/games/warzone2100.real")
+
 
 def try_name(name, port):
     workdir = tempfile.mkdtemp(prefix="nametest_")
     configdir = os.path.join(workdir, "cfg")
     ib.port_global = port
-    ah = ib.generate_configs("NTW_3v3Full", configdir, "FreeHost", name,
-                             60, 60, 30, "", "")
+    entries = [{"name": MAP_UNDER_TEST, "mods": []}]
+    ah = wz.generate_configs(
+        MAPS_DIR, MODS_DIR, AUTOHOST_DIR,
+        MAP_UNDER_TEST, entries, configdir,
+        "FreeHost", name,
+        60, 60, 30, "", "",
+        mods=[], mods_version="4.7.0")
     assert ah, "generate failed"
-    cmd = ["/usr/games/warzone2100.real", "--headless", "--nosound",
+    cmd = [WZ_BINARY, "--headless", "--nosound",
            f"--configdir={configdir}", f"--autohost={ah}",
            f"--gameport={port}", "--enablecmdinterface=stdin"]
     p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
@@ -71,7 +94,7 @@ def try_name(name, port):
 
 
 results = {}
-port = 2100
+port = int(os.environ.get("NAMETEST_PORT_START", "2100"))
 pause = float(os.environ.get("NAMETEST_PAUSE", "180"))
 logdir = os.environ.get("NAMETEST_LOGDIR", "/tmp/nametest-logs")
 os.makedirs(logdir, exist_ok=True)
@@ -93,7 +116,7 @@ for name in sys.argv[1:]:
         time.sleep(2)
         import lobby_mitm as lm
         ok, detail = lm.delete_listing_by_game_id(
-            gid, "/home/wzbot/WZ/instance_configs/.lobby_tokens.json",
+            gid, TOKEN_STORE,
             "https://wzlobby.wz2100.net/lobby")
         results[name] = ("LISTED then " + ("deleted" if ok else f"DELETE-FAILED:{detail}"), gid)
         time.sleep(3)

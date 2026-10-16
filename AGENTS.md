@@ -69,7 +69,7 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
 - One listing per public IP: free the slot with an authenticated Python
   DELETE (captured hostToken) before any new POST; never overlap listings.
 
-## Completed 2026-10-16 (verified: `py_compile`, 53 unittest, fix harness)
+## Completed 2026-10-16 (verified: `py_compile`, `python3 -m unittest` OK)
 - Redirect readiness: triple-gate (`lobby_id` + `stdin_ready` + `room_state=="lobby"` + localhost port probe) via `maybe_signal_ready`/`check_lobby_ready`; startup polls `status` until `LOBBY_ID_TIMEOUT`.
 - Actual bound port: `find_available_port` returns `None` when full; readiness probe confirms the child listens.
 - Fresh roster: `roster_updated_event` + `request_roster_refresh()` in timeout/map migrations; chat commands run on a worker thread (`_handle_chat_cmd`) so waits never stall the reader.
@@ -79,7 +79,7 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
 - Timeout 90 → 80 min (`START_TIMEOUT=4800`).
 - Per-map mods: `mods/` mirrors `maps/`; `--mod_mp` staging into `<configdir>/mods/multiplay/`; name validation + fail-fast.
 - Config-driven `"maps": [{name, mods}]` (dir scan is back-compat fallback); `/maps` annotates mods; spawn/timeout thread name+mods through.
-- `save_authorized_pkeys` locked (`fcntl` + atomic replace); `get_public_ip` cached (`PUBLIC_IP_TTL`); size-based log rotation; `open_ports.sh` idempotent + `install_dep.sh` hardened; `README.md`; `test_instance_bot.py` (14 tests).
+- `save_authorized_pkeys` locked (dedicated `.lock` file + atomic replace); `get_public_ip` cached (`PUBLIC_IP_TTL`) with fallback providers; size-based log rotation; `open_ports.sh` idempotent + `install_dep.sh` hardened; `README.md`; `test_instance_bot.py` + `test_lobby_mitm.py` (run: `python3 -m unittest`).
 
 ## Remaining polish
 - Lobby blackhole: PROVEN live 2026-10-16 (stock WZ 4.7.0, real lobby).

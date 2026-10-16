@@ -63,7 +63,7 @@ Verify after checkout:
 
 ```bash
 python3 -m py_compile instance_bot.py test_instance_bot.py
-python3 -m unittest test_instance_bot   # expect: Ran 14 tests ... OK
+python3 -m unittest   # expect: OK
 ```
 
 ## 4. Remaining live work (do these here, in order)

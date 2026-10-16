@@ -14,8 +14,8 @@ open_one() {
   if iptables -C INPUT -p tcp --dport "$1" -j ACCEPT 2>/dev/null; then
     echo "TCP port $1 already accepted, nothing to do."
   else
-    echo "Inserting TCP port $1 before REJECT rule..."
-    iptables -I INPUT 5 -p tcp --dport "$1" -j ACCEPT
+    echo "Inserting TCP port $1 at top of INPUT (before any REJECT)..."
+    iptables -I INPUT 1 -p tcp --dport "$1" -j ACCEPT
   fi
 }
 

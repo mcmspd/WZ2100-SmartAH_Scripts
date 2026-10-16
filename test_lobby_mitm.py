@@ -227,9 +227,6 @@ class LoopbackProxyTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class BlocklistTests(unittest.TestCase):
     def test_roundtrip(self):
         tmp = tempfile.mkdtemp()
@@ -451,3 +448,69 @@ class ForgeTests(unittest.TestCase):
                              up_seen)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class FragmentedHelloTests(unittest.TestCase):
+    def test_fragmented_hello_still_intercepted(self):
+        import socket
+        import threading
+        import time
+        full = build_client_hello("wzlobby.wz2100.net")
+        c1, c2 = socket.socketpair()
+        try:
+            seen = {}
+
+            def fake_intercepted(client, sni, *a, **k):
+                seen["sni"] = sni
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+            with unittest.mock.patch.object(mitm, "handle_intercepted",
+                                            side_effect=fake_intercepted):
+                t = threading.Thread(
+                    target=mitm.handle_client,
+                    args=(c1, ["wzlobby.wz2100.net"], "k", "c", "d", "s"),
+                    daemon=True)
+                t.start()
+                # Deliver the ClientHello in two fragments with a gap.
+                c2.sendall(full[:20])
+                time.sleep(0.5)
+                c2.sendall(full[20:])
+                t.join(timeout=10)
+                self.assertFalse(t.is_alive(), "handle_client hung on fragmented hello")
+            self.assertEqual(seen.get("sni"), "wzlobby.wz2100.net")
+        finally:
+            for s in (c1, c2):
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+    def test_non_tls_passthrough_does_not_hang(self):
+        import socket
+        import threading
+        c1, c2 = socket.socketpair()
+        try:
+            with unittest.mock.patch.object(
+                    mitm, "handle_passthrough_prefixed") as pt:
+                t = threading.Thread(
+                    target=mitm.handle_client,
+                    args=(c1, ["wzlobby.wz2100.net"], "k", "c", "d", "s"),
+                    daemon=True)
+                t.start()
+                c2.sendall(b"GET / HTTP/1.0\r\n\r\n")
+                t.join(timeout=10)
+                self.assertFalse(t.is_alive(), "handle_client hung on plain HTTP")
+                pt.assert_called_once()
+        finally:
+            for s in (c1, c2):
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+
+if __name__ == "__main__":
+    unittest.main()
