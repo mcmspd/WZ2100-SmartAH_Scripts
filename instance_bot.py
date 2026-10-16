@@ -47,6 +47,8 @@ MIN_UPTIME_TO_RESPAWN = 120  # seconds: only auto-respawn a crashed instance thi
 MAX_RESTARTS_PER_HOUR = 3    # give up respawning after this many restarts in 3600s
 MIGRATION_RETRY_BASE = 600   # seconds: base delay before retrying a failed migration
 MIGRATION_MAX_ATTEMPTS = 3   # give up migration retries after this many failures
+MIGRATION_DRAIN_SECONDS = 600  # seconds to wait for players to rejoin before old shutdown
+MIGRATION_NAME_SUFFIX = " (new)"  # appended to the successor lobby name
 LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate session log past this size
 PUBLIC_IP_TTL = 300  # seconds: cache get_public_ip() this long
 
@@ -469,7 +471,8 @@ def generate_configs(
 
     return ah_name
 
-def spawn_new_instance(map_name: str, mods: list | None = None) -> tuple[int, str] | None:
+def spawn_new_instance(map_name: str, mods: list | None = None,
+                        name_suffix: str = "") -> tuple[int, str] | None:
     """Launch a fresh bot instance in a new tmux session.
 
     Returns (port, session_name), or None when spawning is refused
@@ -494,40 +497,50 @@ def spawn_new_instance(map_name: str, mods: list | None = None) -> tuple[int, st
     cmd = [
         "tmux", "new-session", "-d", "-s", session_name,
         "python3", os.path.join(SCRIPT_DIR, "instance_bot.py"),
-        str(port), session_name, map_name, ",".join(mods),
+        str(port), session_name, map_name, ",".join(mods), name_suffix,
     ]
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return port, session_name
 
 
-def redirect_all_players(new_port: int) -> int:
-    """Redirect all connected human players and spectators to the new instance."""
-    with roster_lock:
-        roster_snapshot = list(roster.items())
-
-    game_pw = config.get("game_password", "")
+def is_own_host_entry(entry: dict) -> bool:
+    """Our own spectator-host pseudo-slot (local; unknown IP)."""
     host_name = config.get("host_name", "")
-    count = 0
-    for pk, entry in roster_snapshot:
-        if not pk or pk == "-":
-            continue
-        # Skip our own spectator-host pseudo-slot (local, ip unknown).
-        # Real spectators (with a public IP) ARE redirected.
-        if (host_name and entry.get("name") == host_name
-                and entry.get("is_spec") and entry.get("ip") in (None, "-", "")):
-            continue
-        is_spec = 1 if entry.get("is_spec", False) else 0
-        if game_pw:
-            conn_str = f"tcp:{new_port}:{is_spec}:{game_pw}"
-        else:
-            conn_str = f"tcp:{new_port}:{is_spec}"
+    return bool(host_name and entry.get("name") == host_name
+                and entry.get("is_spec") and entry.get("ip") in (None, "-", ""))
 
-        player_name = entry.get("name", "Unknown")
-        log("REDIRECT", f"Redirecting {player_name} ({pk}) to {conn_str}")
-        send_cmd(f"redirect identity {pk} {conn_str}")
-        count += 1
-    log("REDIRECT", f"Redirect command issued for {count} connection(s).")
-    return count
+
+def lobby_has_drained() -> bool:
+    """True when nobody but our own host slot remains in the lobby."""
+    with roster_lock:
+        for pk, entry in roster.items():
+            if not pk or pk == "-":
+                continue
+            if is_own_host_entry(entry):
+                continue
+            return False
+    return True
+
+
+def wait_for_drain(timeout: float) -> bool:
+    """Wait until the lobby drains (players rejoin the new lobby manually).
+
+    NOTE: stock `redirect identity` cannot hand public-IP players over:
+    their clients direct-connect without lobby join tokens, which the new
+    host rejects (ERROR_WRONGDATA) under the default Lobby Join Bypass=Local
+    (see upstream `allowNonLobbyMediatedJoin`). So migration announces the
+    new lobby and waits for players to rejoin it through the lobby instead.
+    Must NOT run on the output-reader thread (it blocks waiting for room
+    status updates that only the reader thread can process).
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not request_roster_refresh():
+            log("WARN", "No fresh roster while waiting for drain; retrying.")
+        elif lobby_has_drained():
+            return True
+        time.sleep(15)
+    return lobby_has_drained()
 
 
 def unlist_self_via_api(started: bool = False) -> bool:
@@ -912,6 +925,15 @@ def check_game_ended(prev_state):
                 arm_start_timeout()
 
 
+def announce_successor(game_name: str, new_port: int):
+    """Tell the lobby how to reach the successor (manual rejoin)."""
+    game_pw = config.get("game_password", "")
+    bcast(f"New lobby is ready: {game_name} (port {new_port}). Please rejoin it from the lobby list.")
+    if game_pw:
+        bcast(f"The password is still: {game_pw}")
+    bcast("This lobby will close once everyone has moved over.")
+
+
 def _migration_backoff_delay() -> float:
     with migration_lock:
         attempts = migration_attempts
@@ -940,7 +962,8 @@ def _start_timeout_expired():
         if not unlist_self_via_api():
             log("WARN", "Proceeding without freeing the lobby slot; new listing may be rejected.")
         spawned = spawn_new_instance(current_map_name or config.get("map_name", ""),
-                                     list(current_map_mods))
+                                     list(current_map_mods),
+                                     name_suffix=config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX))
         if spawned is None:
             log("WARN", "Could not spawn a new instance (cap reached or no free port). Keeping current lobby open.")
             with migration_lock:
@@ -954,12 +977,15 @@ def _start_timeout_expired():
                 return
         if status and status.get("lobby_id"):
             new_lobby_id = status["lobby_id"]
-            log("MIGRATE", f"Fresh instance {new_session} ready with lobby ID {new_lobby_id}. Redirecting players to port {new_port}...")
-            if not request_roster_refresh():
-                log("WARN", "No fresh roster before redirect; using last known roster.")
-            bcast(f"Fresh lobby is ready. Redirecting everyone to port {new_port}...")
-            redirect_all_players(new_port)
-            time.sleep(5)
+            game_name = config.get("game_name", "") + config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX)
+            log("MIGRATE", f"Fresh instance {new_session} ready with lobby ID {new_lobby_id}. Announcing it for manual rejoin...")
+            announce_successor(game_name, new_port)
+            drain = float(config.get("migration_drain_seconds", MIGRATION_DRAIN_SECONDS))
+            if wait_for_drain(drain):
+                log("MIGRATE", "Lobby drained. Shutting down old instance.")
+            else:
+                log("MIGRATE", "Drain deadline passed with players still here. Shutting down anyway.")
+                bcast("Closing this lobby now. Please rejoin the new lobby from the list.")
             with migration_lock:
                 migration_attempts = 0
             quit_after_game = True
@@ -1414,7 +1440,8 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
             try:
                 if not unlist_self_via_api():
                     log("WARN", "Proceeding without freeing the lobby slot; new listing may be rejected.")
-                spawned = spawn_new_instance(map_to_load, mods_to_load)
+                spawned = spawn_new_instance(map_to_load, mods_to_load,
+                                             name_suffix=config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX))
                 if spawned is None:
                     bcast("Map change failed: could not launch a new lobby (cap reached or no free port).")
                     with map_change_lock:
@@ -1430,12 +1457,15 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
                         return
                 if status and status.get("lobby_id"):
                     new_lobby_id = status["lobby_id"]
-                    log("MIGRATE", f"New instance {new_session} ready with lobby ID {new_lobby_id}. Redirecting players to port {new_port}...")
-                    if not request_roster_refresh():
-                        log("WARN", "No fresh roster before redirect; using last known roster.")
-                    bcast(f"New lobby is ready. Redirecting everyone to {map_to_load}{mod_note} on port {new_port}...")
-                    redirect_all_players(new_port)
-                    time.sleep(5)
+                    game_name = config.get("game_name", "") + config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX)
+                    log("MIGRATE", f"New instance {new_session} ready with lobby ID {new_lobby_id}. Announcing it for manual rejoin...")
+                    announce_successor(game_name, new_port)
+                    drain = float(config.get("migration_drain_seconds", MIGRATION_DRAIN_SECONDS))
+                    if wait_for_drain(drain):
+                        log("MIGRATE", "Lobby drained. Shutting down old instance.")
+                    else:
+                        log("MIGRATE", "Drain deadline passed with players still here. Shutting down anyway.")
+                        bcast("Closing this lobby now. Please rejoin the new lobby from the list.")
                     quit_after_game = True
                     with map_change_lock:
                         map_change_in_progress = False
@@ -1978,7 +2008,8 @@ def main():
     global lobby_id, startup_error, stdin_ready, room_state
     global current_map_name, current_map_mods
 
-    # Args: [port] [session_name] [map_name] [mods_csv] — normally set by spawner
+    # Args: [port] [session_name] [map_name] [mods_csv] [name_suffix]
+    # — normally set by spawner
     if len(sys.argv) > 1:
         port_global = int(sys.argv[1])
     else:
@@ -1998,6 +2029,9 @@ def main():
     spawn_mods = []
     if len(sys.argv) > 4 and sys.argv[4].strip():
         spawn_mods = [m for m in sys.argv[4].split(",") if m]
+    if len(sys.argv) > 5 and sys.argv[5]:
+        config["game_name"] = config.get("game_name", "") + sys.argv[5]
+        log("INFO", f"Display name    : {config['game_name']}")
     current_map_name = config.get("map_name", "")
     entry = get_map_entry(current_map_name)
     current_map_mods = list(spawn_mods) if spawn_mods else (list(entry["mods"]) if entry else [])
