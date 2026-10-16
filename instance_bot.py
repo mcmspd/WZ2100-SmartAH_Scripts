@@ -535,13 +535,33 @@ def unlist_self_via_api(started: bool = False) -> bool:
     if not lobby_id:
         log("UNLIST", "No lobby ID known; nothing to unlist.")
         return False
-    lobby_address = config.get("lobby_address", "https://wzlobby.wz2100.net")
+    lobby_address = get_wz_lobbyserver() or config.get("lobby_address", "https://wzlobby.wz2100.net/lobby")
     ok, detail = lobby_mitm.delete_listing_by_game_id(
         lobby_id, lobby_mitm.TOKEN_STORE_DEFAULT, lobby_address, started)
     log("UNLIST", f"DELETE {lobby_id}: {detail}")
     if not ok and "no captured hostToken" in detail:
         log("UNLIST", "Hint: run lobby_mitm.py and steer this UID's 443 via lobby_off.sh.")
     return ok
+
+
+def get_wz_lobbyserver() -> str | None:
+    """Read the lobbyserver= value from this instance's WZ config file.
+
+    This is the same address WZ itself uses, so Python API calls always agree
+    with the instance (including custom/alternative lobbies).
+    """
+    try:
+        config_path = os.path.join(SCRIPT_DIR, "instance_configs", session_global, "config")
+        with open(config_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("lobbyserver="):
+                    value = line.split("=", 1)[1].strip()
+                    if value:
+                        return value
+    except Exception:
+        pass
+    return None
 
 # ─── System Info Helpers ──────────────────────────────────────────────────────
 
@@ -1945,7 +1965,15 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
 
     try:
-        wz_install = detect_wz_install()
+        backend = config.get("wz_backend", "auto")
+        if backend in ("flatpak", "system"):
+            if backend == "system" and shutil.which("warzone2100") is None:
+                log("ERROR", "wz_backend=system but no warzone2100 binary found.")
+                sys.exit(1)
+            wz_install = backend
+            log("INFO", f"WZ install (forced by config): {wz_install}")
+        else:
+            wz_install = detect_wz_install()
     except RuntimeError as e:
         log("ERROR", str(e))
         sys.exit(1)

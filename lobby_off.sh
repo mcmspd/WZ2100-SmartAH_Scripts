@@ -5,6 +5,10 @@
 # Idempotent. Only affects NEW connections from that UID; ESTABLISHED player
 # traffic is untouched. Only port 443 is redirected; the proxy allowlists the
 # lobby SNI and tunnels everything else straight through.
+#
+# CRITICAL: the proxy itself MUST run as a DIFFERENT user, otherwise its own
+# upstream connections loop back into the proxy (fork bomb -> EMFILE death).
+# Typical layout: WZ + instance_bot run as <wz-user>, proxy runs as you.
 set -e
 
 if [ "$EUID" -ne 0 ]; then

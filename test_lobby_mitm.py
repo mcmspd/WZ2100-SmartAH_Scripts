@@ -96,9 +96,9 @@ class DeleteTests(unittest.TestCase):
 
         with unittest.mock.patch.object(urllib.request, "urlopen", fake_urlopen):
             ok, detail = mitm.delete_lobby_listing(
-                "gid-9", "tok-9", lobby_address="https://example.invalid")
+                "gid-9", "tok-9", lobby_address="https://example.invalid/lobby")
         self.assertTrue(ok)
-        self.assertEqual(seen["url"], "https://example.invalid/api/v1/game/gid-9")
+        self.assertEqual(seen["url"], "https://example.invalid/lobby/api/v1/game/gid-9")
         self.assertEqual(seen["method"], "DELETE")
         self.assertEqual(seen["auth"], "HostToken tok-9")
         self.assertEqual(seen["origin"], "wz2100://wz2100.net")

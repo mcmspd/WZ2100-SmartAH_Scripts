@@ -207,7 +207,8 @@ class UnlistTests(unittest.TestCase):
 
     def test_delete_success(self):
         ib.lobby_id = "gid-1"
-        with unittest.mock.patch.object(
+        with unittest.mock.patch.object(ib, "get_wz_lobbyserver", return_value=None), \
+             unittest.mock.patch.object(
                 ib.lobby_mitm, "delete_listing_by_game_id",
                 return_value=(True, "HTTP 200")) as dl:
             self.assertTrue(ib.unlist_self_via_api())
@@ -217,7 +218,40 @@ class UnlistTests(unittest.TestCase):
 
     def test_delete_failure(self):
         ib.lobby_id = "gid-1"
-        with unittest.mock.patch.object(
+        with unittest.mock.patch.object(ib, "get_wz_lobbyserver", return_value=None), \
+             unittest.mock.patch.object(
                 ib.lobby_mitm, "delete_listing_by_game_id",
                 return_value=(False, "HTTP 401")):
             self.assertFalse(ib.unlist_self_via_api())
+
+    def test_delete_uses_wz_lobbyserver(self):
+        ib.lobby_id = "gid-1"
+        with unittest.mock.patch.object(
+                ib, "get_wz_lobbyserver",
+                return_value="https://lobby.example.test/custom"), \
+             unittest.mock.patch.object(
+                ib.lobby_mitm, "delete_listing_by_game_id",
+                return_value=(True, "HTTP 200")) as dl:
+            self.assertTrue(ib.unlist_self_via_api())
+            dl.assert_called_once_with(
+                "gid-1", ib.lobby_mitm.TOKEN_STORE_DEFAULT,
+                "https://lobby.example.test/custom", False)
+
+    def test_lobbyserver_from_wz_config(self):
+        import tempfile
+        import shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            fake_dir = os.path.join(tmp, "instance_configs", "SESS")
+            os.makedirs(fake_dir)
+            with open(os.path.join(fake_dir, "config"), "w") as f:
+                f.write("[General]\nlobbyserver=https://lobby.example.test/custom\n")
+            with unittest.mock.patch.object(ib, "SCRIPT_DIR", tmp):
+                ib.session_global = "SESS"
+                self.assertEqual(ib.get_wz_lobbyserver(),
+                                 "https://lobby.example.test/custom")
+                ib.session_global = "MISSING"
+                self.assertIsNone(ib.get_wz_lobbyserver())
+        finally:
+            ib.session_global = ""
+            shutil.rmtree(tmp, ignore_errors=True)

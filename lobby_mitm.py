@@ -256,7 +256,7 @@ def build_lobby_headers(host_token: str, referer_kind: str = "mp.host") -> dict:
 
 
 def delete_lobby_listing(game_id: str, host_token: str,
-                         lobby_address: str = "https://wzlobby.wz2100.net",
+                         lobby_address: str = "https://wzlobby.wz2100.net/lobby",
                          started: bool = False, timeout: int = 30) -> tuple[bool, str]:
     """DELETE a game listing with the instance's own credential.
 
@@ -283,7 +283,7 @@ def delete_lobby_listing(game_id: str, host_token: str,
 
 
 def delete_listing_by_game_id(game_id: str, store_path: str = TOKEN_STORE_DEFAULT,
-                              lobby_address: str = "https://wzlobby.wz2100.net",
+                              lobby_address: str = "https://wzlobby.wz2100.net/lobby",
                               started: bool = False) -> tuple[bool, str]:
     """Load the captured token for game_id and DELETE its listing."""
     entry = load_lobby_token(store_path, game_id)
