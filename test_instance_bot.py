@@ -255,3 +255,46 @@ class UnlistTests(unittest.TestCase):
         finally:
             ib.session_global = ""
             shutil.rmtree(tmp, ignore_errors=True)
+
+class BuildCommandTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.port_global, ib.session_global, ib.current_map_mods)
+
+    def tearDown(self):
+        ib.config, ib.port_global, ib.session_global, ib.current_map_mods = self._old
+
+    def _base_config(self, **kw):
+        cfg = {"map_name": "M", "host_name": "H", "game_name": "G",
+               "wz_headless": True, "wz_nosound": True, "wz_debug_flags": [],
+               "wz_extra_args": []}
+        cfg.update(kw)
+        return cfg
+
+    def test_system_binary_override(self):
+        ib.config = self._base_config(wz_binary="/usr/games/warzone2100.real")
+        ib.port_global = 2110
+        ib.session_global = "S"
+        ib.current_map_mods = []
+        with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_M"):
+            cmd = ib.build_command("system")
+        self.assertEqual(cmd[0], "/usr/games/warzone2100.real")
+        self.assertIn("--gameport=2110", cmd)
+
+    def test_mod_flags(self):
+        ib.config = self._base_config()
+        ib.port_global = 2110
+        ib.session_global = "S"
+        ib.current_map_mods = ["modA", "modB"]
+        with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_M"):
+            cmd = ib.build_command("system")
+        self.assertIn("--mod_mp=modA", cmd)
+        self.assertIn("--mod_mp=modB", cmd)
+
+    def test_async_flag(self):
+        ib.config = self._base_config(wz_async_join_approve=True)
+        ib.port_global = 2110
+        ib.session_global = "S"
+        ib.current_map_mods = []
+        with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_M"):
+            cmd = ib.build_command("system")
+        self.assertIn("--async-join-approve", cmd)

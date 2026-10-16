@@ -1878,7 +1878,12 @@ def build_command(wz_install: str) -> list:
             "net.wz2100.wz2100",
         ] + common_args
     else:  # system binary
-        return ["warzone2100"] + common_args
+        binary = config.get("wz_binary") or "warzone2100"
+        if "/" not in binary:
+            resolved = shutil.which(binary) or "/usr/games/warzone2100"
+        else:
+            resolved = binary
+        return [resolved] + common_args
 def shutdown(signum=None, frame=None):
     global start_timeout_timer
     log("INFO", "Shutting down...")
@@ -1967,9 +1972,13 @@ def main():
     try:
         backend = config.get("wz_backend", "auto")
         if backend in ("flatpak", "system"):
-            if backend == "system" and shutil.which("warzone2100") is None:
-                log("ERROR", "wz_backend=system but no warzone2100 binary found.")
-                sys.exit(1)
+            if backend == "system":
+                binary = config.get("wz_binary") or "warzone2100"
+                found = binary if "/" in binary and os.path.exists(binary) else (
+                    shutil.which(binary) or "/usr/games/warzone2100")
+                if not found or not os.path.exists(found):
+                    log("ERROR", "wz_backend=system but no warzone2100 binary found.")
+                    sys.exit(1)
             wz_install = backend
             log("INFO", f"WZ install (forced by config): {wz_install}")
         else:
