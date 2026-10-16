@@ -690,3 +690,53 @@ class SurvivalTests(unittest.TestCase):
         finally:
             ib.MAPS_DIR = old_maps
             shutil.rmtree(tmp, ignore_errors=True)
+
+class AutostartTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.port_global, ib.session_global,
+                     ib.current_map_name, ib.current_map_mods)
+        ib.config = {"maps": [{"name": "S", "mods": ["Survival_Mod"]},
+                              {"name": "N", "mods": []},
+                              {"name": "C", "mods": [], "autostart_players": 4}]}
+        ib.port_global = 2110
+        ib.session_global = "S"
+
+    def tearDown(self):
+        (ib.config, ib.port_global, ib.session_global,
+         ib.current_map_name, ib.current_map_mods) = self._old
+
+    def test_defaults(self):
+        self.assertEqual(ib.get_autostart_players("S"), 2)
+        self.assertEqual(ib.get_autostart_players("N"), 0)
+        self.assertEqual(ib.get_autostart_players("C"), 4)
+        self.assertEqual(ib.get_autostart_players("???"), 0)
+
+    def test_flag_present_only_when_on(self):
+        ib.current_map_mods = []
+        with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_X"):
+            ib.current_map_name = "S"
+            self.assertIn("--startplayers=2", ib.build_command("system"))
+            ib.current_map_name = "N"
+            self.assertNotIn("--startplayers=2", ib.build_command("system"))
+
+    def test_readybeforefull_only_for_survival(self):
+        import tempfile, shutil, zipfile, json as _json, os
+        tmp = tempfile.mkdtemp()
+        old_maps = ib.MAPS_DIR
+        ib.MAPS_DIR = tmp
+        try:
+            for name in ("S", "N"):
+                with zipfile.ZipFile(os.path.join(tmp, f"{name}.wz"), "w") as z:
+                    z.writestr("level.json", _json.dumps({"players": 4}))
+            cfg = os.path.join(tmp, "cfg")
+            ah = ib.generate_configs("S", cfg, "H", "G", 30, 30, 30, "", "",
+                                     ["Survival_Mod"])
+            data = _json.load(open(os.path.join(cfg, "autohost", ah)))
+            self.assertEqual(data["locked"].get("readybeforefull"), False)
+            cfg2 = os.path.join(tmp, "cfg2")
+            ah2 = ib.generate_configs("N", cfg2, "H", "G", 30, 30, 30, "", "", [])
+            data2 = _json.load(open(os.path.join(cfg2, "autohost", ah2)))
+            self.assertNotIn("readybeforefull", data2["locked"])
+        finally:
+            ib.MAPS_DIR = old_maps
+            shutil.rmtree(tmp, ignore_errors=True)

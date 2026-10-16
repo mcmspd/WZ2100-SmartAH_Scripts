@@ -337,6 +337,20 @@ def is_safe_mod_name(name: str) -> bool:
     return bool(name) and bool(SAFE_NAME_RE.fullmatch(name)) and "/" not in name and name not in (".", "..")
 
 
+def get_autostart_players(map_name: str) -> int:
+    """Minimum humans to auto-start (`--startplayers`). Explicit
+    `autostart_players` wins; survival maps default to 2, else off (0)."""
+    entry = None
+    for e in config.get("maps", []) or []:
+        if isinstance(e, dict) and e.get("name") == map_name:
+            entry = e
+            break
+    if entry and isinstance(entry.get("autostart_players"), int):
+        return max(0, entry["autostart_players"])
+    survival, _ = is_survival_map(map_name, (entry.get("mods", []) if entry else []))
+    return 2 if survival else 0
+
+
 def get_map_entry(map_name: str) -> dict | None:
     """Look up a configured map entry {name, file, mods, survival, ...}."""
     for entry in config.get("maps", []) or []:
@@ -609,11 +623,16 @@ def generate_configs(
         "locked": {"power": True, "alliances": True, "teams": True, "difficulty": False, "ai": False, "scavengers": True, "position": False, "bases": True},
         "challenge": challenge,
     }
-    
+    survival, survival_ai_js = is_survival_map(map_name, mods)
+    if survival:
+        # Survival lobbies must be startable (and auto-startable) with open
+        # slots: stock autohost locks ready-behind-full, which would force a
+        # full house before anyone can even check Ready.
+        ah_data["locked"]["readybeforefull"] = False
+
     # Generate teams. Survival maps: slot 0 is Team A, occupied by the
     # Survival AI; every other slot is open Team B for humans. All other
     # maps keep the default 2-team split with no preassigned AI.
-    survival, survival_ai_js = is_survival_map(map_name, mods)
     if survival:
         log("INFO", f"Survival layout for {map_name}: slot 0 = Team A AI ({survival_ai_js}), "
                     f"slots 1-{players - 1} = open Team B")
@@ -2269,6 +2288,9 @@ def build_command(wz_install: str) -> list:
         common_args.append("--portmapping=false")
     if config.get("wz_async_join_approve", True):
         common_args.append("--async-join-approve")
+    autostart = get_autostart_players(current_map_name)
+    if autostart > 0:
+        common_args.append(f"--startplayers={autostart}")
     if config.get("wz_enable_lobby_slashcmd", False):
         common_args.append("--enablelobbyslashcmd")
     for mod in mods:
