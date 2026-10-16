@@ -1105,6 +1105,14 @@ def migrate_to_successor(new_port: int, new_session: str, new_lobby_id: str,
             pass
         return announce_and_drain(game_name, new_port)
 
+    # Abandon confirmed. Unblock immediately: the handler is dead and will not
+    # revive, but our own management calls (redirect-time checks, keepalive
+    # PATCHes, future DELETE) must flow again. Leaving it blocked would make
+    # the proxy kill our own API calls (self-sabotage).
+    try:
+        lobby_mitm.unblock_game(blocklist_path(), new_lobby_id)
+    except Exception as e:
+        log("WARN", f"Could not unblock {new_lobby_id} ({e}); management calls may fail.")
     if not request_roster_refresh():
         log("WARN", "No fresh roster before redirect; using last known roster.")
     bcast(f"Moving everyone to {game_name} now - hold on...")

@@ -419,6 +419,19 @@ class MigrateFlowTests(unittest.TestCase):
     def tearDown(self):
         ib.config, ib.process, ib.roster = self._old
 
+    def test_redirect_path_unblocks(self):
+        ib.roster = {}
+        with unittest.mock.patch.object(ib.lobby_mitm, "block_game"), \
+             unittest.mock.patch.object(ib.lobby_mitm, "unblock_game") as ug, \
+             unittest.mock.patch.object(ib, "wait_for_abandon", return_value=True), \
+             unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
+             unittest.mock.patch.object(ib, "redirect_all_players", return_value=1), \
+             unittest.mock.patch.object(ib, "start_lobby_keepalive"), \
+             unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
+             unittest.mock.patch.object(ib.time, "sleep", return_value=None):
+            self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G 2", "t"))
+        ug.assert_called_once_with(ib.blocklist_path(), "gid-1")
+
     def test_redirect_path(self):
         ib.roster = {"P1": {"type": "player", "name": "Ann", "pos": 0, "idx": 0,
                             "is_spec": False, "ip": "1.1.1.1"}}
