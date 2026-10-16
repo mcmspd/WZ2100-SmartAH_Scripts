@@ -253,46 +253,6 @@ class BlocklistTests(unittest.TestCase):
         self.assertIsNone(mitm.request_targets_blocked_game(create, {"g1"}))
 
 
-class KeepaliveTests(unittest.TestCase):
-    def test_patch_success(self):
-        import urllib.request
-
-        class FakeResp:
-            status = 200
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-        seen = {}
-
-        def fake_urlopen(req, timeout=None):
-            seen["method"] = req.get_method()
-            seen["body"] = req.data
-            seen["auth"] = req.get_header("Authorization")
-            return FakeResp()
-
-        with unittest.mock.patch.object(urllib.request, "urlopen", fake_urlopen):
-            ok, detail = mitm.patch_lobby_keepalive(
-                "g1", "tok", lobby_address="https://example.invalid/lobby")
-        self.assertTrue(ok)
-        self.assertEqual(seen["method"], "PATCH")
-        self.assertEqual(seen["body"], b"{}")
-        self.assertEqual(seen["auth"], "HostToken tok")
-
-    def test_patch_gone(self):
-        import urllib.request
-        import urllib.error
-        err = urllib.error.HTTPError(
-            "u", 404, "not found", {},
-            __import__("io").BytesIO(b'{"code":"GAME_NOT_FOUND"}'))
-        with unittest.mock.patch.object(urllib.request, "urlopen", side_effect=err):
-            ok, detail = mitm.patch_lobby_keepalive("g1", "tok")
-        self.assertFalse(ok)
-        self.assertIn("gone=True", detail)
-
 class StorePermsTests(unittest.TestCase):
     def test_store_is_group_readable(self):
         import stat as _stat

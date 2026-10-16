@@ -21,7 +21,6 @@ import sys
 import threading
 import time
 from datetime import datetime
-import glob
 import re
 import shutil
 import socket
@@ -943,15 +942,6 @@ def get_entry_by_pk(pk: str) -> dict | None:
     """Look up any roster entry by pk."""
     with roster_lock:
         return roster.get(pk)
-
-
-def get_pos_by_pk(pk: str) -> int | None:
-    """Get a player's position by their pk."""
-    with roster_lock:
-        entry = roster.get(pk)
-        if entry and entry["type"] == "player":
-            return entry.get("pos")
-    return None
 
 # ─── Game Process Communication ───────────────────────────────────────────────
 

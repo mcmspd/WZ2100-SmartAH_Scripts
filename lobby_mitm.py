@@ -347,34 +347,6 @@ def delete_listing_by_game_id(game_id: str, store_path: str = TOKEN_STORE_DEFAUL
     return delete_lobby_listing(game_id, entry["host_token"], lobby_address, started)
 
 
-def patch_lobby_keepalive(game_id: str, host_token: str,
-                          lobby_address: str = "https://wzlobby.wz2100.net/lobby",
-                          timeout: int = 30) -> tuple[bool, str]:
-    """Send an empty PATCH keepalive (exactly what stock WZ sends when idle).
-
-    Returns (ok, detail). A 404/GAME_NOT_FOUND means the entry is gone and
-    keepalives should stop.
-    """
-    import urllib.request
-    import urllib.error
-    url = f"{lobby_address.rstrip('/')}/api/v1/game/{game_id}"
-    req = urllib.request.Request(url, data=b"{}", method="PATCH",
-                                 headers=build_lobby_headers(host_token))
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            code = getattr(resp, "status", 200)
-            return (200 <= code < 300, f"HTTP {code}")
-    except urllib.error.HTTPError as e:
-        try:
-            body = e.read().decode("utf-8", errors="replace")[:300]
-        except Exception:
-            body = ""
-        gone = e.code == 404 or "GAME_NOT_FOUND" in body or "GAME_STALE" in body
-        return (False, f"HTTP {e.code} {body} | gone={gone}")
-    except Exception as e:
-        return (False, f"{type(e).__name__}: {e}")
-
-
 # ─── relay ────────────────────────────────────────────────────────────────────
 
 BUF = 65536
