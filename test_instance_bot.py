@@ -914,7 +914,9 @@ class GameSuccessorTests(unittest.TestCase):
         ib.game_started = True
         ib.process = unittest.mock.Mock()
         ib.process.poll.return_value = None
-        with unittest.mock.patch.object(ib, "spawn_new_instance",
+        with unittest.mock.patch.object(ib, "family_listing_ids",
+                                        return_value=[]), \
+             unittest.mock.patch.object(ib, "spawn_new_instance",
                                         return_value=(2101, "S")) as sp, \
              unittest.mock.patch.object(ib, "wait_for_new_instance_ready",
                                         return_value={"lobby_id": "lid-1"}):
@@ -936,7 +938,9 @@ class GameSuccessorTests(unittest.TestCase):
         ib.game_started = True
         ib.process = unittest.mock.Mock()
         ib.process.poll.return_value = None
-        with unittest.mock.patch.object(ib, "spawn_new_instance",
+        with unittest.mock.patch.object(ib, "family_listing_ids",
+                                        return_value=[]), \
+             unittest.mock.patch.object(ib, "spawn_new_instance",
                                         return_value=(2101, "S")), \
              unittest.mock.patch.object(ib, "wait_for_new_instance_ready",
                                         return_value=None):
@@ -1031,3 +1035,99 @@ class SpawnCapTests(unittest.TestCase):
 
     def test_default_cap_leaves_migration_spare(self):
         self.assertGreaterEqual(ib.MAX_LIVE_SESSIONS, 3)
+
+class SingleListingTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.lobby_id, ib.instance_start_time,
+                     ib.game_successor_session, ib.map_change_in_progress)
+        ib.config = {"game_name": "FreeHost", "migration_name_suffix": " 2"}
+        ib.lobby_id = "own-id"
+        ib.instance_start_time = ib.time.time() - 7200
+        ib.game_successor_session = None
+        ib.map_change_in_progress = False
+
+    def tearDown(self):
+        (ib.config, ib.lobby_id, ib.instance_start_time,
+         ib.game_successor_session, ib.map_change_in_progress) = self._old
+
+    def _games(self, *entries):
+        return [{"id": i, "name": n, "map": "M"} for i, n in entries]
+
+    def test_family_matching_and_exclusion(self):
+        games = self._games(("own-id", "FreeHost"), ("s-id", "FreeHost 2"),
+                            ("other", "OtherHost"), ("prefix", "FreeHostess"))
+        with unittest.mock.patch.object(ib.lobby_mitm, "list_lobby_games",
+                                        return_value=games):
+            self.assertEqual(ib.family_listing_ids(), ["own-id", "s-id"])
+            self.assertEqual(ib.family_listing_ids(exclude_id="own-id"), ["s-id"])
+
+    def test_family_empty_on_fetch_failure(self):
+        with unittest.mock.patch.object(ib.lobby_mitm, "list_lobby_games",
+                                        side_effect=RuntimeError("down")):
+            self.assertEqual(ib.family_listing_ids(), [])
+
+    def test_enforce_deletes_others_keeps_new(self):
+        deleted = []
+        fam = lambda exclude_id=None: [g for g in ["old-a", "new-id"] if g != exclude_id]
+        with unittest.mock.patch.object(ib, "family_listing_ids",
+                                        side_effect=fam), \
+             unittest.mock.patch.object(ib.lobby_mitm, "delete_listing_by_game_id",
+                                        lambda gid, *a: (deleted.append(gid), (True, "HTTP 200"))[1]):
+            ib.enforce_single_listing("new-id")
+        self.assertEqual(deleted, ["old-a"])
+
+    def test_migrate_enforces_on_drained_success(self):
+        ib.roster = {}
+        with unittest.mock.patch.object(ib, "publish_relay_target", return_value=True), \
+             unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
+             unittest.mock.patch.object(ib, "redirect_all_players", return_value=0), \
+             unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
+             unittest.mock.patch.object(ib, "get_public_ip", return_value="9.9.9.9"), \
+             unittest.mock.patch.object(ib, "enforce_single_listing") as enf, \
+             unittest.mock.patch.object(ib.time, "sleep", return_value=None):
+            self.assertTrue(ib.migrate_to_successor(2101, "S", "new-id", "FreeHost 2", "t"))
+        enf.assert_called_once_with("new-id")
+
+    def test_game_start_skips_when_covered(self):
+        ib.game_started = True
+        ib.process = unittest.mock.Mock()
+        ib.process.poll.return_value = None
+        try:
+            with unittest.mock.patch.object(ib, "family_listing_ids",
+                                            return_value=["live-id"]), \
+                 unittest.mock.patch.object(ib, "spawn_new_instance") as sp:
+                ib._spawn_game_successor()
+            sp.assert_not_called()
+            self.assertIsNone(ib.game_successor_session)
+        finally:
+            ib.process = None
+            ib.game_started = False
+
+    def test_crash_skips_when_covered(self):
+        with unittest.mock.patch.object(ib, "record_restart_and_check_cap",
+                                        return_value=True), \
+             unittest.mock.patch.object(ib, "unlist_self_via_api",
+                                        return_value=True) as un, \
+             unittest.mock.patch.object(ib, "family_listing_ids",
+                                        return_value=["live-id"]), \
+             unittest.mock.patch.object(ib, "spawn_new_instance") as sp:
+            ib.maybe_spawn_crash_replacement()
+        un.assert_called_once_with()
+        sp.assert_not_called()
+
+    def test_crash_spawns_when_clean(self):
+        with unittest.mock.patch.object(ib, "record_restart_and_check_cap",
+                                        return_value=True), \
+             unittest.mock.patch.object(ib, "unlist_self_via_api",
+                                        return_value=True), \
+             unittest.mock.patch.object(ib, "family_listing_ids",
+                                        return_value=[]), \
+             unittest.mock.patch.object(ib, "spawn_new_instance") as sp:
+            ib.maybe_spawn_crash_replacement()
+        sp.assert_called_once_with("", [])
+
+    def test_crash_refuses_short_uptime(self):
+        ib.instance_start_time = ib.time.time()
+        with unittest.mock.patch.object(ib, "spawn_new_instance") as sp:
+            ib.maybe_spawn_crash_replacement()
+        sp.assert_not_called()

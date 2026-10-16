@@ -339,6 +339,42 @@ def delete_lobby_listing(game_id: str, host_token: str,
         return (False, f"{type(e).__name__}: {e}")
 
 
+def list_lobby_games(lobby_address: str = "https://wzlobby.wz2100.net/lobby",
+                     timeout: int = 20) -> list:
+    """Fetch the public game list. Returns [{id, name, map}] (best effort).
+
+    Used by the bot to prove the one-listing invariant before spawning.
+    Never raises: failures yield [] (callers treat unknown as unlisted).
+    """
+    import urllib.request
+    url = f"{lobby_address.rstrip('/')}/api/v1/games"
+    req = urllib.request.Request(url, headers={
+        "Origin": "wz2100://wz2100.net",
+        "Referer": "https://github.com/Warzone2100/warzone2100?wz_internal=list",
+        "Accept": "application/jsonl",
+        "User-Agent": "Warzone2100 (+https://github.com/Warzone2100/warzone2100)",
+    })
+    out = []
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        log(f"public list fetch failed: {e}")
+        return []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue
+        if o.get("id") and o.get("name"):
+            out.append({"id": o["id"], "name": o["name"],
+                        "map": (o.get("map") or ["?"])[0]})
+    return out
+
+
 def delete_listing_by_game_id(game_id: str, store_path: str = TOKEN_STORE_DEFAULT,
                               lobby_address: str = "https://wzlobby.wz2100.net/lobby",
                               started: bool = False) -> tuple[bool, str]:

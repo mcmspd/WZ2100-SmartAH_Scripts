@@ -532,6 +532,60 @@ def wait_for_drain(timeout: float) -> bool:
     return lobby_has_drained()
 
 
+def _lobby_address_for_api() -> str:
+    """Lobby base URL this instance agrees with WZ on (best effort)."""
+    try:
+        addr = get_wz_lobbyserver()
+        if addr:
+            return addr
+    except Exception:
+        pass
+    return config.get("lobby_address", "https://wzlobby.wz2100.net/lobby")
+
+
+def family_listing_ids(exclude_id: str | None = None) -> list:
+    """Public lobby IDs in our game-name family, optionally excluding one.
+
+    The family is the base game name plus the migration-suffixed variant
+    ("FreeHost" and "FreeHost ..."). Never raises: fetch failures yield []
+    (callers treat unknown as unlisted and today's behavior continues).
+    """
+    base = config.get("game_name", "")
+    if not base:
+        return []
+    try:
+        games = lobby_mitm.list_lobby_games(_lobby_address_for_api())
+    except Exception as e:
+        log("WARN", f"Public list check failed ({e}); proceeding as if unlisted.")
+        return []
+    ids = []
+    for g in games:
+        name = g.get("name", "")
+        if (name == base or name.startswith(base + " ")) and g.get("id") != exclude_id:
+            ids.append(g["id"])
+    return ids
+
+
+def enforce_single_listing(keep_id: str | None):
+    """DELETE any publicly listed family game except keep_id. Best effort.
+
+    The lobby sometimes accepts a second POST from our IP; this is the
+    backstop that keeps the invariant (exactly one listing) true after every
+    migration. Never raises.
+    """
+    try:
+        store = config.get("lobby_token_store") or lobby_mitm.TOKEN_STORE_DEFAULT
+        address = _lobby_address_for_api()
+        for gid in family_listing_ids(exclude_id=keep_id):
+            try:
+                ok, detail = lobby_mitm.delete_listing_by_game_id(gid, store, address)
+            except Exception as e:
+                ok, detail = False, f"{type(e).__name__}: {e}"
+            log("UNLIST", f"Enforce single listing: DELETE {gid}: {detail}")
+    except Exception as e:
+        log("WARN", f"Single-listing enforcement failed: {e}")
+
+
 def unlist_self_via_api(started: bool = False) -> bool:
     """DELETE our own lobby listing using the MITM-captured hostToken.
 
@@ -943,6 +997,13 @@ def _spawn_game_successor():
         with start_timeout_lock:
             if not game_started or process is None or process.poll() is not None:
                 return
+        try:
+            others = family_listing_ids(exclude_id=lobby_id)
+        except Exception:
+            others = []
+        if others:
+            log("GAME", f"Lobby already covered by {others}; skipping game-start successor.")
+            return
         spawned = spawn_new_instance(current_map_name or config.get("map_name", ""),
                                      list(current_map_mods),
                                      name_suffix="")
@@ -1055,6 +1116,39 @@ def _post_game_handover(successor_session: str, live: tuple[int, str]):
                     arm_start_timeout()
 
 
+def maybe_spawn_crash_replacement() -> None:
+    """Crash-path replacement that never double-lists (called from main).
+
+    Frees our own slot first, then spawns only when no other family listing
+    is public. A dead instance must never POST a second listing next to a
+    live lobby.
+    """
+    uptime = time.time() - (instance_start_time or time.time())
+    min_uptime = float(config.get("min_uptime_to_respawn_seconds", MIN_UPTIME_TO_RESPAWN))
+    if uptime < min_uptime:
+        log("WARN", f"Process died after {uptime:.0f}s (< {min_uptime:.0f}s). Not respawning; likely a systemic failure.")
+        return
+    if not record_restart_and_check_cap():
+        log("ERROR", "Hourly restart cap reached. Not respawning; operator intervention required.")
+        return
+    try:
+        if lobby_id:
+            unlist_self_via_api()
+    except Exception:
+        pass
+    try:
+        others = family_listing_ids(exclude_id=lobby_id)
+    except Exception as e:
+        log("WARN", f"Public list check failed ({e}); spawning replacement anyway.")
+        others = []
+    if others:
+        log("WARN", f"Lobby already covered by {others}; not spawning crash replacement.")
+        return
+    log("INFO", "Process crashed unexpectedly. Spawning new instance.")
+    spawn_new_instance(current_map_name or config.get("map_name", ""),
+                       list(current_map_mods))
+
+
 def crash_respawn_allowed() -> bool:
     """False when a live game-start successor already holds the lobby.
 
@@ -1110,9 +1204,13 @@ def migrate_to_successor(new_port: int, new_session: str, new_lobby_id: str,
     time.sleep(30)  # let clients complete the auto-follow handshake
     if lobby_has_drained():
         log("MIGRATE", "Lobby drained via redirect. Shutting down old instance.")
+        enforce_single_listing(new_lobby_id)
         return True
     log("MIGRATE", "Some players did not follow the redirect; falling back to manual rejoin.")
-    return announce_and_drain(game_name, new_port)
+    if announce_and_drain(game_name, new_port):
+        enforce_single_listing(new_lobby_id)
+        return True
+    return False
 
 
 def announce_and_drain(game_name: str, new_port: int) -> bool:
@@ -2435,16 +2533,7 @@ def main():
             start_timeout_timer = None
 
     if not quit_after_game and not lobby_verification_failed and crash_respawn_allowed():
-        uptime = time.time() - (instance_start_time or time.time())
-        min_uptime = float(config.get("min_uptime_to_respawn_seconds", MIN_UPTIME_TO_RESPAWN))
-        if uptime < min_uptime:
-            log("WARN", f"Process died after {uptime:.0f}s (< {min_uptime:.0f}s). Not respawning; likely a systemic failure.")
-        elif not record_restart_and_check_cap():
-            log("ERROR", "Hourly restart cap reached. Not respawning; operator intervention required.")
-        else:
-            log("INFO", "Process crashed unexpectedly. Spawning new instance.")
-            spawn_new_instance(current_map_name or config.get("map_name", ""),
-                               list(current_map_mods))
+        maybe_spawn_crash_replacement()
 
     write_session_status(session_global, "exited", port_global)
     log_file_handle.close()

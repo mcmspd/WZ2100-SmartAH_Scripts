@@ -514,3 +514,24 @@ class FragmentedHelloTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class PublicListTests(unittest.TestCase):
+    def test_parses_jsonl_and_skips_garbage(self):
+        body = ('{"id": "a", "name": "FreeHost", "map": ["M"]}\n'
+                'not json\n'
+                '\n'
+                '{"id": "b", "name": "FreeHost 2"}\n'
+                '{"name": "nameless"}\n')
+        resp = unittest.mock.Mock()
+        resp.read.return_value = body.encode()
+        ctx = unittest.mock.MagicMock()
+        ctx.__enter__.return_value = resp
+        with unittest.mock.patch("urllib.request.urlopen", return_value=ctx):
+            got = mitm.list_lobby_games("https://x/lobby")
+        self.assertEqual(got, [{"id": "a", "name": "FreeHost", "map": "M"},
+                               {"id": "b", "name": "FreeHost 2", "map": "?"}])
+
+    def test_failure_yields_empty(self):
+        with unittest.mock.patch("urllib.request.urlopen",
+                                 side_effect=OSError("down")):
+            self.assertEqual(mitm.list_lobby_games("https://x/lobby"), [])
