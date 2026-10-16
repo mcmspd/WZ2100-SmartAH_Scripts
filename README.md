@@ -10,7 +10,7 @@ output, and reacts (greetings, vote-kick, map changes, timeout migration).
 - `wz_config.py` — config generation (library + CLI). `python3 wz_config.py --validate` checks maps/mods; `--map NAME` / `--all` pre-generates instance configs.
 - `autohost/` — pre-generated autohost JSON per map (`<MapName>.json`). Edit freely: the bot uses your file verbatim except instance identity (`challenge` map/maxPlayers/name/password), and fills team slots only if you define none. Missing file = bot generates + saves defaults here.
 - `maps/` — map `.wz` files referenced by name from `instances.json`.
-- `mods/` — mod `.wz` files referenced by name from per-map `mods` lists.
+- `mods/` — mod `.wz` files or source directories, referenced by name from per-map `mods` lists.
 - `test_instance_bot.py` — stdlib unit tests (`python3 -m unittest test_instance_bot`).
 - `open_ports.sh` / `install_dep.sh` — firewall (TCP 2100–2110) and dependency setup.
 
