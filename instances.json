@@ -19,6 +19,7 @@
     "By staying in this host, you agree to the above terms."
   ],
   "map_name": "NTW_3v3Full",
+  "lobby_address": "https://wzlobby.wz2100.net",
   "maps": [
     {"name": "NTW_3v3Full", "mods": []},
     {"name": "NTW_4x4_Full", "mods": []},

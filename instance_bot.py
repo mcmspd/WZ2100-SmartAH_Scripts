@@ -13,6 +13,7 @@ This script can be run standalone with no arguments:
 
 import base64
 import json
+import lobby_mitm
 import os
 import signal
 import subprocess
@@ -522,6 +523,26 @@ def redirect_all_players(new_port: int) -> int:
     log("REDIRECT", f"Redirect command issued for {count} connection(s).")
     return count
 
+
+def unlist_self_via_api(started: bool = False) -> bool:
+    """DELETE our own lobby listing using the MITM-captured hostToken.
+
+    The WZ process keeps running with its players; its next keepalive sees a
+    gone game (local lobbyGameGone, no kicks). Frees the one-per-IP slot so a
+    successor can POST. Returns False when no token was captured (proxy not
+    running for the WZ user) or the DELETE failed.
+    """
+    if not lobby_id:
+        log("UNLIST", "No lobby ID known; nothing to unlist.")
+        return False
+    lobby_address = config.get("lobby_address", "https://wzlobby.wz2100.net")
+    ok, detail = lobby_mitm.delete_listing_by_game_id(
+        lobby_id, lobby_mitm.TOKEN_STORE_DEFAULT, lobby_address, started)
+    log("UNLIST", f"DELETE {lobby_id}: {detail}")
+    if not ok and "no captured hostToken" in detail:
+        log("UNLIST", "Hint: run lobby_mitm.py and steer this UID's 443 via lobby_off.sh.")
+    return ok
+
 # ─── System Info Helpers ──────────────────────────────────────────────────────
 
 def get_cpu_load() -> str:
@@ -855,6 +876,8 @@ def _start_timeout_expired():
         mins = START_TIMEOUT // 60
         log("TIMEOUT", f"{mins}-minute start window expired. Spawning new instance to migrate players...")
         bcast("Lobby timeout expired. Launching fresh lobby...")
+        if not unlist_self_via_api():
+            log("WARN", "Proceeding without freeing the lobby slot; new listing may be rejected.")
         spawned = spawn_new_instance(current_map_name or config.get("map_name", ""),
                                      list(current_map_mods))
         if spawned is None:
@@ -1306,6 +1329,8 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
         def _handle_map_change(map_to_load: str, mods_to_load: list):
             global quit_after_game, map_change_in_progress, migration_attempts
             try:
+                if not unlist_self_via_api():
+                    log("WARN", "Proceeding without freeing the lobby slot; new listing may be rejected.")
                 spawned = spawn_new_instance(map_to_load, mods_to_load)
                 if spawned is None:
                     bcast("Map change failed: could not launch a new lobby (cap reached or no free port).")
@@ -1360,6 +1385,21 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
         if sender_pk:
             for l in lines:
                 dm(sender_pk, l)
+        return
+
+    # ── /unlobby ───────────────────────────────────────────────────────────────
+    if msg_lower == "/unlobby":
+        auth_pkeys = config.get("authorized_pkeys", [])
+        if sender_pk not in auth_pkeys:
+            if sender_pk:
+                dm(sender_pk, "You are not authorized to unlist this lobby.")
+            return
+        if unlist_self_via_api():
+            if sender_pk:
+                dm(sender_pk, f"Listing {lobby_id} deleted. This lobby is now direct-connect only.")
+        else:
+            if sender_pk:
+                dm(sender_pk, "Unlist failed (no captured token or DELETE rejected).")
         return
 
     # ── /mapsadmin ─────────────────────────────────────────────────────────────

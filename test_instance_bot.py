@@ -185,3 +185,39 @@ class RestartCapTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnlistTests(unittest.TestCase):
+    def setUp(self):
+        self._old_config = ib.config
+        self._old_lobby = ib.lobby_id
+        ib.config = {"lobby_address": "https://example.invalid"}
+        ib.process = None
+
+    def tearDown(self):
+        ib.config = self._old_config
+        ib.lobby_id = self._old_lobby
+        ib.process = None
+
+    def test_no_lobby_id(self):
+        ib.lobby_id = None
+        with unittest.mock.patch.object(ib.lobby_mitm, "delete_listing_by_game_id") as dl:
+            self.assertFalse(ib.unlist_self_via_api())
+            dl.assert_not_called()
+
+    def test_delete_success(self):
+        ib.lobby_id = "gid-1"
+        with unittest.mock.patch.object(
+                ib.lobby_mitm, "delete_listing_by_game_id",
+                return_value=(True, "HTTP 200")) as dl:
+            self.assertTrue(ib.unlist_self_via_api())
+            dl.assert_called_once_with(
+                "gid-1", ib.lobby_mitm.TOKEN_STORE_DEFAULT,
+                "https://example.invalid", False)
+
+    def test_delete_failure(self):
+        ib.lobby_id = "gid-1"
+        with unittest.mock.patch.object(
+                ib.lobby_mitm, "delete_listing_by_game_id",
+                return_value=(False, "HTTP 401")):
+            self.assertFalse(ib.unlist_self_via_api())
