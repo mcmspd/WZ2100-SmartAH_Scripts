@@ -24,8 +24,12 @@ rule_up() {
   sudo iptables -t nat -L OUTPUT -n 2>/dev/null | grep -q "match $uid.*redir ports $PROXY_PORT"
 }
 
+bot_sessions() {
+  sudo -u "$GAME_USER" tmux ls -F "#{session_name}" 2>/dev/null | grep "^WZ_" || true
+}
+
 bot_up() {
-  sudo -u "$GAME_USER" tmux ls 2>/dev/null | grep -q "^$SESSION:"
+  [ -n "$(bot_sessions)" ]
 }
 
 do_status() {
@@ -34,11 +38,15 @@ do_status() {
   echo "--- firewall ---"
   rule_up && echo "redirect: ACTIVE" || echo "redirect: MISSING"
   echo "--- instance ---"
-  if bot_up; then
-    echo "tmux: UP"
-    sudo cat "$GAME_REPO/instance_configs/$SESSION.status.json" 2>/dev/null || echo "(no status yet)"
+  SESSIONS=$(bot_sessions)
+  if [ -n "$SESSIONS" ]; then
+    echo "tmux sessions:"
+    echo "$SESSIONS" | while read -r s; do
+      ST=$(sudo cat "$GAME_REPO/instance_configs/$s.status.json" 2>/dev/null)
+      echo "  $s: $ST"
+    done
   else
-    echo "tmux: DOWN"
+    echo "tmux: DOWN (no WZ_* sessions)"
   fi
 }
 
@@ -63,7 +71,8 @@ do_start() {
   fi
   # 3. instance
   if bot_up; then
-    echo "Instance already running."
+    echo "Instance already running: $(bot_sessions | tr '\n' ' ')"
+    echo "Stop it first if you want a fresh one."
   else
     echo "Starting instance..."
     if [ -n "$MAP" ]; then EXTRA=" $MAP"; else EXTRA=""; fi
@@ -85,15 +94,17 @@ do_start() {
 
 do_stop() {
   if bot_up; then
-    echo "Stopping instance gracefully..."
-    sudo -u "$GAME_USER" tmux send-keys -t "$SESSION" C-c
+    echo "Stopping instances gracefully..."
+    for s in $(bot_sessions); do
+      sudo -u "$GAME_USER" tmux send-keys -t "$s" C-c
+    done
     for _ in $(seq 1 6); do
       sleep 5
       bot_up || break
     done
     sudo pkill -x warzone2100.real 2>/dev/null || true
     sudo -u "$GAME_USER" tmux kill-server 2>/dev/null || true
-    echo "Instance stopped. (Proxy + firewall left running for next start.)"
+    echo "Instances stopped. (Proxy + firewall left running for next start.)"
   else
     echo "Instance not running."
   fi
