@@ -82,7 +82,8 @@ class ConfigMapTests(unittest.TestCase):
         ib.config = {"maps": [{"name": "A", "mods": ["m1"]}, "B"]}
         self.assertEqual(ib.get_available_maps(), ["A", "B"])
         self.assertEqual(ib.get_map_entry("A"),
-                         {"name": "A", "file": "A.wz", "mods": ["m1"]})
+                         {"name": "A", "file": "A.wz", "mods": ["m1"],
+                          "survival": False, "survival_ai_js": "SurvivalMod.js"})
         self.assertIsNone(ib.get_map_entry("ZZZ"))
 
     def test_map_file_field(self):
@@ -635,3 +636,57 @@ class StageModsTests(unittest.TestCase):
         import zipfile
         names = zipfile.ZipFile(p1).namelist()
         self.assertEqual(names, sorted(names))
+
+class SurvivalTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.MAPS_DIR)
+        ib.config = {"maps": [{"name": "S", "mods": ["Survival_Mod"]},
+                              {"name": "N", "mods": []}]}
+
+    def tearDown(self):
+        ib.config = self._old[0]
+
+    def test_survival_detection(self):
+        self.assertEqual(ib.is_survival_map("S", ["Survival_Mod"])[0], True)
+        self.assertEqual(ib.is_survival_map("N", [])[0], False)
+        ib.config = {"maps": [{"name": "S2", "mods": [], "survival": True,
+                               "survival_ai_js": "X.js"}]}
+        self.assertEqual(ib.is_survival_map("S2", []), (True, "X.js"))
+
+    def test_survival_layout(self):
+        import tempfile, shutil, zipfile, json as _json, os
+        tmp = tempfile.mkdtemp()
+        old_maps = ib.MAPS_DIR
+        ib.MAPS_DIR = tmp
+        try:
+            zpath = os.path.join(tmp, "S.wz")
+            with zipfile.ZipFile(zpath, "w") as z:
+                z.writestr("level.json", _json.dumps({"players": 5}))
+            cfg = os.path.join(tmp, "cfg")
+            ah = ib.generate_configs("S", cfg, "H", "G", 30, 30, 30, "", "",
+                                     ["Survival_Mod"])
+            self.assertTrue(ah)
+            data = _json.load(open(os.path.join(cfg, "autohost", ah)))
+            self.assertEqual(data["player_0"], {"team": 0, "ai": "SurvivalMod.js"})
+            for i in range(1, 5):
+                self.assertEqual(data[f"player_{i}"], {"team": 1})
+        finally:
+            ib.MAPS_DIR = old_maps
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_normal_layout_untouched(self):
+        import tempfile, shutil, zipfile, json as _json, os
+        tmp = tempfile.mkdtemp()
+        old_maps = ib.MAPS_DIR
+        ib.MAPS_DIR = tmp
+        try:
+            zpath = os.path.join(tmp, "N.wz")
+            with zipfile.ZipFile(zpath, "w") as z:
+                z.writestr("level.json", _json.dumps({"players": 4}))
+            cfg = os.path.join(tmp, "cfg")
+            ah = ib.generate_configs("N", cfg, "H", "G", 30, 30, 30, "", "", [])
+            data = _json.load(open(os.path.join(cfg, "autohost", ah)))
+            self.assertNotIn("ai", data["player_0"])
+        finally:
+            ib.MAPS_DIR = old_maps
+            shutil.rmtree(tmp, ignore_errors=True)

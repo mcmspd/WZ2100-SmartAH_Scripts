@@ -338,14 +338,30 @@ def is_safe_mod_name(name: str) -> bool:
 
 
 def get_map_entry(map_name: str) -> dict | None:
-    """Look up a configured map entry {name, file, mods}. Returns None if unknown."""
+    """Look up a configured map entry {name, file, mods, survival, ...}."""
     for entry in config.get("maps", []) or []:
         if isinstance(entry, dict) and entry.get("name") == map_name:
             mods = entry.get("mods", [])
+            mods = list(mods) if isinstance(mods, list) else []
             filename = entry.get("file") or f"{map_name}.wz"
-            return {"name": map_name, "file": filename,
-                    "mods": list(mods) if isinstance(mods, list) else []}
+            return {"name": map_name, "file": filename, "mods": mods,
+                    "survival": bool(entry.get("survival", False)),
+                    "survival_ai_js": entry.get("survival_ai_js", "SurvivalMod.js")}
     return None
+
+
+def is_survival_map(map_name: str, mods: list) -> tuple[bool, str]:
+    """Survival layout if flagged or the Survival mod is loaded.
+
+    Returns (survival, ai_js).
+    """
+    entry = get_map_entry(map_name)
+    if entry and entry.get("survival"):
+        return True, entry.get("survival_ai_js", "SurvivalMod.js")
+    if "Survival_Mod" in (mods or []):
+        ai_js = entry.get("survival_ai_js", "SurvivalMod.js") if entry else "SurvivalMod.js"
+        return True, ai_js
+    return False, ""
 
 
 def resolve_map_file(map_name: str) -> str:
@@ -594,10 +610,20 @@ def generate_configs(
         "challenge": challenge,
     }
     
-    # Generate teams based on 2 teams
-    for i in range(players):
-        team = i // max(1, (players // 2))
-        ah_data[f"player_{i}"] = {"team": team}
+    # Generate teams. Survival maps: slot 0 is Team A, occupied by the
+    # Survival AI; every other slot is open Team B for humans. All other
+    # maps keep the default 2-team split with no preassigned AI.
+    survival, survival_ai_js = is_survival_map(map_name, mods)
+    if survival:
+        log("INFO", f"Survival layout for {map_name}: slot 0 = Team A AI ({survival_ai_js}), "
+                    f"slots 1-{players - 1} = open Team B")
+        ah_data["player_0"] = {"team": 0, "ai": survival_ai_js}
+        for i in range(1, players):
+            ah_data[f"player_{i}"] = {"team": 1}
+    else:
+        for i in range(players):
+            team = i // max(1, (players // 2))
+            ah_data[f"player_{i}"] = {"team": team}
         
     with open(ah_path, "w") as f:
         json.dump(ah_data, f, indent=2)

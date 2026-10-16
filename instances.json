@@ -51,7 +51,8 @@
       "mods": [
         "More_Fort",
         "Survival_Mod"
-      ]
+      ],
+      "survival": true
     }
   ],
   "wz_headless": true,
