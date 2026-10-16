@@ -47,7 +47,21 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
 5. `request_roster_refresh()` → mass redirect → `sleep 5` → old `shutdown now`. Done.
 6. Join-time `ERROR_REDIRECT`: deferred; auto-approve (`on_join_approval`) implemented instead.
 
-## Completed 2026-10-16 (verified: `py_compile`, 14 unittest, fix harness)
+## Lobby doctrine (learned live — read before touching lobby flows)
+
+- The lobby throttles aggressively (creates/deletes in quick succession).
+  Rules: never rapid-retry POSTs; `RATE_LIMITED` stops all retries
+  immediately (instance exits, spawner backs off 20 min); every test POST is
+  followed by an immediate DELETE; name-bisect runs spaced ≥3 min apart.
+- Game-name validation is server-side and picky: `INPUT_VALIDATION_FAILED`
+  ("avoid special characters") rejected `(new)`/`[new]`-style suffixes even
+  though live lobbies use brackets. Proven-safe: plain alphanumeric suffixes
+  (`FreeHost`, `FreeHost 2`). Every new suffix must pass `is_lobby_safe_name`
+  AND one spaced live POST before use; `nametest.py` is the tool for that.
+- One listing per public IP: free the slot with an authenticated Python
+  DELETE (captured hostToken) before any new POST; never overlap listings.
+
+## Completed 2026-10-16 (verified: `py_compile`, 53 unittest, fix harness)
 - Redirect readiness: triple-gate (`lobby_id` + `stdin_ready` + `room_state=="lobby"` + localhost port probe) via `maybe_signal_ready`/`check_lobby_ready`; startup polls `status` until `LOBBY_ID_TIMEOUT`.
 - Actual bound port: `find_available_port` returns `None` when full; readiness probe confirms the child listens.
 - Fresh roster: `roster_updated_event` + `request_roster_refresh()` in timeout/map migrations; chat commands run on a worker thread (`_handle_chat_cmd`) so waits never stall the reader.
