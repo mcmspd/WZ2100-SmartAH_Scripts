@@ -469,6 +469,51 @@ def extract_map_info(map_name: str, map_file: str | None = None) -> dict | None:
         log("WARN", f"Failed to extract map info: {e}")
         return None
 
+def zip_mod_dir(source_dir: str, target_wz: str):
+    """Package a mod directory into a deterministic .wz (stable hash)."""
+    with zipfile.ZipFile(target_wz, "w", zipfile.ZIP_DEFLATED) as z:
+        for root, dirs, files in os.walk(source_dir):
+            dirs.sort()
+            for fname in sorted(files):
+                full = os.path.join(root, fname)
+                arc = os.path.relpath(full, source_dir)
+                info = zipfile.ZipInfo(arc, date_time=(2020, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with open(full, "rb") as f:
+                    z.writestr(info, f.read())
+
+
+def stage_mods(configdir: str, staged: list) -> bool:
+    """Copy/file or zip/dir staged mods into versioned + unversioned multiplay dirs.
+
+    WZ resolves `--mod_mp` names as regular files under the *versioned*
+    `mods/<tag>/multiplay` dir (see upstream main.cpp mod check), so each mod
+    lands as `<mod>.wz` in both versioned and unversioned locations.
+    Directories are zipped deterministically (stable hash across spawns).
+    `staged` items are (mod, kind, source) with kind in {"file", "dir"}.
+    """
+    tag = str(config.get("wz_mods_version", "4.7.0") or "4.7.0")
+    target_dirs = [
+        os.path.join(configdir, "mods", tag, "multiplay"),
+        os.path.join(configdir, "mods", "multiplay"),
+    ]
+    for target_mods_dir in target_dirs:
+        os.makedirs(target_mods_dir, exist_ok=True)
+        for mod, kind, source in staged:
+            target = os.path.join(target_mods_dir, f"{mod}.wz")
+            try:
+                if kind == "file":
+                    shutil.copy2(source, target)
+                else:
+                    if os.path.exists(target):
+                        os.remove(target)
+                    zip_mod_dir(source, target)
+            except Exception as e:
+                log("WARN", f"Failed to stage mod {mod}: {e}")
+                return False
+    return True
+
+
 def generate_configs(
     map_name: str,
     configdir: str,
@@ -577,17 +622,10 @@ def generate_configs(
         log("WARN", f"Map file missing, aborting config generation: {map_file}")
         return False
 
-    # Stage per-map mods into the config mods directory (mirrors maps/).
-    # Both .wz files and mod directories are supported.
+    # Stage per-map mods (versioned + unversioned multiplay dirs).
     if staged:
-        target_mods_dir = os.path.join(configdir, "mods", "multiplay")
-        os.makedirs(target_mods_dir, exist_ok=True)
-        for mod, kind, source in staged:
-            if kind == "file":
-                shutil.copy2(source, os.path.join(target_mods_dir, f"{mod}.wz"))
-            else:
-                shutil.copytree(source, os.path.join(target_mods_dir, mod),
-                                dirs_exist_ok=True)
+        if not stage_mods(configdir, staged):
+            return False
         log("INFO", f"Staged {len(staged)} mod(s) for map {map_name}: {', '.join(mods)}")
 
     return ah_name
@@ -2208,7 +2246,8 @@ def build_command(wz_install: str) -> list:
     if config.get("wz_enable_lobby_slashcmd", False):
         common_args.append("--enablelobbyslashcmd")
     for mod in mods:
-        common_args.append(f"--mod_mp={mod}")
+        # Exact staged filename (regular file check upstream).
+        common_args.append(f"--mod_mp={mod}.wz")
     for extra in config.get("wz_extra_args", []):
         if isinstance(extra, str) and extra.startswith("--") and "\n" not in extra:
             if extra not in common_args:

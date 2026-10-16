@@ -325,8 +325,8 @@ class BuildCommandTests(unittest.TestCase):
         ib.current_map_mods = ["modA", "modB"]
         with unittest.mock.patch.object(ib, "generate_configs", return_value="AH_M"):
             cmd = ib.build_command("system")
-        self.assertIn("--mod_mp=modA", cmd)
-        self.assertIn("--mod_mp=modB", cmd)
+        self.assertIn("--mod_mp=modA.wz", cmd)
+        self.assertIn("--mod_mp=modB.wz", cmd)
 
     def test_async_flag(self):
         ib.config = self._base_config(wz_async_join_approve=True)
@@ -603,3 +603,35 @@ class ModSourceTests(unittest.TestCase):
             self.assertEqual(info["players"], 5)
         finally:
             ib.MAPS_DIR = old_maps
+
+class StageModsTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self._old = (ib.config, ib.MODS_DIR)
+        self.tmp = tempfile.mkdtemp()
+        self.src = os.path.join(self.tmp, "src")
+        os.makedirs(os.path.join(self.src, "D", "sub"))
+        open(os.path.join(self.src, "D", "f.txt"), "w").write("x")
+        open(os.path.join(self.src, "D", "sub", "g.txt"), "w").write("y")
+        ib.MODS_DIR = self.src
+        ib.config = {"wz_mods_version": "9.9"}
+
+    def tearDown(self):
+        ib.config, ib.MODS_DIR = self._old[0], self._old[1]
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_zip_is_deterministic(self):
+        out = os.path.join(self.tmp, "out")
+        self.assertTrue(ib.stage_mods(out, [("D", "dir",
+                                            os.path.join(self.src, "D"))]))
+        p1 = os.path.join(out, "mods", "9.9", "multiplay", "D.wz")
+        p2 = os.path.join(out, "mods", "multiplay", "D.wz")
+        self.assertTrue(os.path.exists(p1))
+        self.assertTrue(os.path.exists(p2))
+        import hashlib
+        h = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
+        self.assertEqual(h(p1), h(p2))
+        import zipfile
+        names = zipfile.ZipFile(p1).namelist()
+        self.assertEqual(names, sorted(names))

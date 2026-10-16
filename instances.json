@@ -21,17 +21,51 @@
   "map_name": "NTW_3v3Full",
   "lobby_address": "https://wzlobby.wz2100.net/lobby",
   "maps": [
-    {"name": "NTW_3v3Full", "mods": []},
-    {"name": "NTW_4x4_Full", "mods": []},
-    {"name": "NTW_5v5Full_RQ", "mods": []},
-    {"name": "NTW-Full2v2", "mods": []},
-    {"name": "Opa-Shtorm-A-FB", "mods": []},
-    {"name": "RO_1v1Full", "mods": []},
-    {"name": "5c-Warwick", "file": "5c-Warwick-2fe6272eb3d03888fd238019d06319732987ce16b793bf78b7b5236cdca84371.wz", "mods": ["More_Fort", "Survival_Mod"]}
+    {
+      "name": "NTW_3v3Full",
+      "mods": []
+    },
+    {
+      "name": "NTW_4x4_Full",
+      "mods": []
+    },
+    {
+      "name": "NTW_5v5Full_RQ",
+      "mods": []
+    },
+    {
+      "name": "NTW-Full2v2",
+      "mods": []
+    },
+    {
+      "name": "Opa-Shtorm-A-FB",
+      "mods": []
+    },
+    {
+      "name": "RO_1v1Full",
+      "mods": []
+    },
+    {
+      "name": "Warwick",
+      "file": "5c-Warwick-2fe6272eb3d03888fd238019d06319732987ce16b793bf78b7b5236cdca84371.wz",
+      "mods": [
+        "More_Fort",
+        "Survival_Mod"
+      ]
+    }
   ],
   "wz_headless": true,
   "wz_nosound": true,
-  "wz_debug_flags": ["WZ", "NET", "SCRIPT", "MOVEMENT", "ATTACK", "SYNC", "RESEARCH", "LOBBY"],
+  "wz_debug_flags": [
+    "WZ",
+    "NET",
+    "SCRIPT",
+    "MOVEMENT",
+    "ATTACK",
+    "SYNC",
+    "RESEARCH",
+    "LOBBY"
+  ],
   "wz_host_connection_provider": "tcp",
   "wz_portmapping": false,
   "wz_async_join_approve": true,
@@ -53,5 +87,6 @@
     "MC+++acZ5VxnMXJ2nf2FrKcRSDJSUsq7p/63CX5KTxI=",
     "MCBFC+18ORD9/evLgVI755BHDZbLSq3kvV3gg2CgFtY=",
     "NEWBFCpnvRP0OXu6tMFfu/LeeePAYaE139alCcz9Kfo="
-  ]
+  ],
+  "wz_mods_version": "4.7.0"
 }
