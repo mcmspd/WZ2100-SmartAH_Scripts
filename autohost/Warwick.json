@@ -25,7 +25,9 @@
   },
   "player_0": {
     "team": 0,
-    "ai": "SurvivalMod.js"
+    "ai": "SurvivalMod.js",
+    "difficulty": "Insane",
+    "name": "Survival Mod"
   },
   "player_1": {
     "team": 1
