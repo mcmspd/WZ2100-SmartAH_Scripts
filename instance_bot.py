@@ -1090,12 +1090,15 @@ def migrate_to_successor(new_port: int, new_session: str, new_lobby_id: str,
     Returns True when this instance should shut down afterwards.
     """
     log("MIGRATE", f"Fresh instance {new_session} ready with lobby ID {new_lobby_id}.")
+    bcast(f"New instance spun up successfully: {game_name}.")
     try:
         lobby_mitm.block_game(blocklist_path(), new_lobby_id)
     except Exception as e:
         log("WARN", f"Could not write proxy blocklist ({e}); using manual-rejoin fallback.")
         return announce_and_drain(game_name, new_port)
 
+    bcast("Cutting lobby access for the new instance so the handover can go "
+          "through (it will briefly disappear from the list)...")
     log("MIGRATE", "Waiting for successor lobby handler to go offline (direct joins open)...")
     if not wait_for_abandon(new_session, timeout=150.0):
         log("WARN", "Successor did not report offline; using manual-rejoin fallback.")
@@ -1113,9 +1116,13 @@ def migrate_to_successor(new_port: int, new_session: str, new_lobby_id: str,
         lobby_mitm.unblock_game(blocklist_path(), new_lobby_id)
     except Exception as e:
         log("WARN", f"Could not unblock {new_lobby_id} ({e}); management calls may fail.")
+    bcast("New instance is now ready for joins.")
     if not request_roster_refresh():
         log("WARN", "No fresh roster before redirect; using last known roster.")
-    bcast(f"Moving everyone to {game_name} now - hold on...")
+    bcast(f"Redirecting you to {game_name} now - hold on, do not disconnect...")
+    bcast("Note: automatic handover works only once per game session. If you "
+          f"have already been moved once, please rejoin {game_name} from the "
+          "lobby list manually instead.")
     moved = redirect_all_players(new_port)
     log("MIGRATE", f"Redirect commands issued for {moved} connection(s).")
     start_lobby_keepalive(new_lobby_id)
@@ -1134,6 +1141,9 @@ def migrate_to_successor(new_port: int, new_session: str, new_lobby_id: str,
 def announce_and_drain(game_name: str, new_port: int) -> bool:
     """Fallback path: announce the successor, wait for manual rejoin."""
     announce_successor(game_name, new_port)
+    bcast("Note: if automatic handover already moved you once this session, "
+          "manual rejoin is expected - the game only allows one automatic "
+          "move per session.")
     drain = float(config.get("migration_drain_seconds", MIGRATION_DRAIN_SECONDS))
     if wait_for_drain(drain):
         log("MIGRATE", "Lobby drained. Shutting down old instance.")
@@ -1172,7 +1182,7 @@ def _start_timeout_expired():
             return
         mins = START_TIMEOUT // 60
         log("TIMEOUT", f"{mins}-minute start window expired. Spawning new instance to migrate players...")
-        bcast("Lobby timeout expired. Launching fresh lobby...")
+        bcast("Lobby timeout expired. Spinning up new instance, this usually takes about 60 seconds...")
         if not unlist_self_via_api():
             log("WARN", "Aborting migration: lobby slot still held and no token to free it.")
             bcast("Migration aborted: could not free the lobby slot. Admins, check the lobby proxy.")
@@ -1658,7 +1668,7 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
             with map_change_lock:
                 map_change_in_progress = False
             return
-        bcast(f"Map change to {new_map}{mod_note} requested by {sender_name}. Launching new lobby...")
+        bcast(f"Map change to {new_map}{mod_note} requested by {sender_name}. Spinning up new instance, this usually takes about 60 seconds...")
 
         def _handle_map_change(map_to_load: str, mods_to_load: list):
             global quit_after_game, map_change_in_progress, migration_attempts

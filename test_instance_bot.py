@@ -503,3 +503,66 @@ class ReapTests(unittest.TestCase):
             with unittest.mock.patch.object(ib, "clear_session_status"):
                 self.assertEqual(ib.reap_dead_sessions(), 1)
         self.assertEqual(killed, ["WZ_OLD"])
+
+class MigrateMessagesTests(unittest.TestCase):
+    def setUp(self):
+        self._old = (ib.config, ib.process, ib.roster)
+        ib.config = {"game_name": "G", "migration_name_suffix": " 2",
+                     "migration_drain_seconds": 600}
+        ib.process = None
+
+    def tearDown(self):
+        ib.config, ib.process, ib.roster = self._old
+
+    def _run_success(self):
+        ib.roster = {}
+        sent = []
+
+        def fake_send(cmd, log_command=True):
+            sent.append(cmd)
+            return True
+
+        with unittest.mock.patch.object(ib, "send_cmd", fake_send), \
+             unittest.mock.patch.object(ib.lobby_mitm, "block_game"), \
+             unittest.mock.patch.object(ib.lobby_mitm, "unblock_game"), \
+             unittest.mock.patch.object(ib, "wait_for_abandon", return_value=True), \
+             unittest.mock.patch.object(ib, "request_roster_refresh", return_value=True), \
+             unittest.mock.patch.object(ib, "redirect_all_players", return_value=0), \
+             unittest.mock.patch.object(ib, "start_lobby_keepalive"), \
+             unittest.mock.patch.object(ib, "lobby_has_drained", return_value=True), \
+             unittest.mock.patch.object(ib.time, "sleep", return_value=None):
+            ib.process = unittest.mock.Mock()
+            ib.process.stdin = unittest.mock.Mock()
+            self.assertTrue(ib.migrate_to_successor(2101, "S", "gid-1", "G 2", "t"))
+        ib.process = None
+        bcasts = [c[len("chat bcast "):] for c in sent if c.startswith("chat bcast ")]
+        return " ".join(bcasts)
+
+    def test_progress_messages_in_order(self):
+        text = self._run_success()
+        markers = ["spun up successfully", "Cutting lobby access",
+                   "ready for joins", "Redirecting you", "only once per game session"]
+        idx = -1
+        for m in markers:
+            self.assertIn(m, text, m)
+            now = text.index(m)
+            self.assertGreater(now, idx, m)
+            idx = now
+
+    def test_fallback_mentions_manual(self):
+        ib.roster = {}
+        sent = []
+
+        def fake_send(cmd, log_command=True):
+            sent.append(cmd)
+            return True
+
+        with unittest.mock.patch.object(ib, "send_cmd", fake_send), \
+             unittest.mock.patch.object(ib, "wait_for_drain", return_value=True):
+            ib.process = unittest.mock.Mock()
+            ib.process.stdin = unittest.mock.Mock()
+            ib.announce_and_drain("G 2", 2101)
+        ib.process = None
+        text = " ".join(sent)
+        self.assertIn("rejoin", text)
+        self.assertIn("one automatic", text)
