@@ -2,4 +2,6 @@ upload.sh
 instance_configs/
 __pycache__/
 *.log
+*.log.*
 mitm-ca/
+WZ_*.log
