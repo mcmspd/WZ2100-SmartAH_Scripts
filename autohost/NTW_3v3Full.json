@@ -1,0 +1,50 @@
+{
+  "locked": {
+    "power": true,
+    "alliances": true,
+    "teams": true,
+    "difficulty": false,
+    "ai": false,
+    "scavengers": true,
+    "position": false,
+    "bases": true,
+    "readybeforefull": false
+  },
+  "challenge": {
+    "map": "NTW_3v3Full",
+    "maxPlayers": 8,
+    "scavengers": 0,
+    "alliances": 2,
+    "powerLevel": 2,
+    "bases": 3,
+    "name": "FreeHost",
+    "techLevel": 1,
+    "spectatorHost": true,
+    "openSpectatorSlots": 10,
+    "blindMode": "none"
+  },
+  "player_0": {
+    "team": 0
+  },
+  "player_1": {
+    "team": 0
+  },
+  "player_2": {
+    "team": 0
+  },
+  "player_3": {
+    "team": 0
+  },
+  "player_4": {
+    "team": 0
+  },
+  "player_5": {
+    "team": 0
+  },
+  "player_6": {
+    "team": 0
+  },
+  "player_7": {
+    "team": 0
+  }
+}
