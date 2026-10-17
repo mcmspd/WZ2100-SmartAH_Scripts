@@ -5,7 +5,7 @@
 set -u
 
 REPO="$HOME/WZ2100-SmartAH_Scripts"
-GAME_REPO="/home/wzbot/WZ"
+GAME_REPO="$REPO"
 GAME_USER="wzbot"
 SESSION="WZ_PROD"
 PORT=2100
