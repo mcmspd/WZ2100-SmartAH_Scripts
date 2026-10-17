@@ -2,7 +2,7 @@
 # deploy.sh — Zero-state deployment + server control for WZ2100 autohost
 #
 # Layout (Option A — everything under $HOME, UID-separated):
-#   Code:         $HOME/WZ2100-SmartAH_Scripts/   (readable by all)
+#   Code:         $HOME/WZ2100-SmartAH_Scripts/   (owned by ubuntu, group wzbot)
 #   Runtime:      $HOME/WZ2100-SmartAH_Scripts/instance_configs/  (writable by wzbot)
 #   Proxy runs as: $SUDO_USER (ubuntu)   — MITM + relay (TCP 18080 + 2200)
 #   Game runs as:  wzbot                  — instance_bot.py + warzone2100.real
@@ -47,13 +47,20 @@ install_deps() {
     if command -v apt-get &>/dev/null; then
         apt-get update -qq
         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            flatpak tmux iptables netfilter-persistent curl openssl git 2>&1 | tail -3
+            tmux iptables netfilter-persistent curl openssl git warzone2100 2>&1 | tail -5
     elif command -v apk &>/dev/null; then
-        apk add --no-cache flatpak tmux iptables netfilter-persistent curl openssl git
+        apk add --no-cache tmux iptables netfilter-persistent curl openssl git warzone2100
     else
-        err "Unsupported package manager. Install manually: flatpak tmux iptables netfilter-persistent curl openssl git"
+        err "Unsupported package manager. Install manually: tmux iptables netfilter-persistent curl openssl git warzone2100"
         exit 1
     fi
+
+    # Verify Warzone binary exists after install
+    if [ ! -x /usr/games/warzone2100.real ]; then
+        err "Warzone binary not found at /usr/games/warzone2100.real after install."
+        exit 1
+    fi
+    log "Warzone binary found: /usr/games/warzone2100.real"
     log "Dependencies installed."
 }
 
@@ -64,6 +71,13 @@ create_user() {
     else
         log "Creating system user $GAME_USER..."
         useradd --system --group --no-create-home --shell /usr/sbin/nologin "$GAME_USER" 2>/dev/null || true
+    fi
+
+    # wzbot must be in ubuntu group to read files under /home/ubuntu
+    # wzbot runs the game; ubuntu runs the proxy — UID separation is critical.
+    if ! id -nG "$GAME_USER" | grep -qw ubuntu; then
+        log "Adding $GAME_USER to ubuntu group for file access..."
+        usermod -aG ubuntu "$GAME_USER"
     fi
 }
 
@@ -123,10 +137,10 @@ generate_config() {
   "wz_extra_args": [],
   "wz_backend": "system",
   "wz_binary": "/usr/games/warzone2100.real",
-  "lobby_token_store": "",
-  "lobby_blocklist": "",
+  "lobby_token_store": "/home/ubuntu/WZ2100-SmartAH_Scripts/instance_configs/.lobby_tokens.json",
+  "lobby_blocklist": "/home/ubuntu/WZ2100-SmartAH_Scripts/instance_configs/.lobby_blocklist.json",
   "relay_port": 2200,
-  "relay_target_file": "",
+  "relay_target_file": "/home/ubuntu/WZ2100-SmartAH_Scripts/instance_configs/.relay_target",
   "migration_drain_seconds": 600,
   "migration_name_suffix": " 2",
   "max_live_sessions": 3,
@@ -149,6 +163,10 @@ setup_dirs() {
     chown -R "$GAME_USER:$GAME_USER" "$REPO_DIR/instance_configs"
     chmod 755 "$REPO_DIR" "$REPO_DIR/instance_configs"
 
+    # wzbot needs write access to repo root for log files (WZ_PROD.log)
+    chmod g+w "$REPO_DIR"
+    chown "$PROXY_USER:$GAME_USER" "$REPO_DIR"
+
     # Everyone needs read access to code, maps, mods, autohost
     chmod -R a+rX "$REPO_DIR" 2>/dev/null || true
 
@@ -162,8 +180,9 @@ check_wz() {
     elif command -v warzone2100.real &>/dev/null; then
         log "Warzone binary found in PATH"
     else
-        warn "Warzone binary NOT found at /usr/games/warzone2100.real"
-        warn "  Install it (e.g. sudo apt install warzone2100) and set wz_binary in instances.json"
+        err "Warzone binary NOT found at /usr/games/warzone2100.real"
+        err "  Install it (e.g. sudo apt install warzone2100) and set wz_binary in instances.json"
+        exit 1
     fi
 }
 
