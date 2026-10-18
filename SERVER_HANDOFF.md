@@ -122,10 +122,13 @@ Currently they land on the old lobby and wait for the mass redirect, which
 works — this only makes handoff seamless. Confirm the numeric code from
 `src/stdinreader.cpp` before wiring it into `on_join_approval`.
 
-## 5. Production layout (deployed 2026-10-16) + safety rules
+## 5. Production layout (Option A, everything under ubuntu) + safety rules
 
-- WZ instances run as `wzbot` from `/home/wzbot/WZ` (own repo clone,
-  `wz_backend=system`, `wz_binary=/usr/games/warzone2100.real`).
+- WZ instances run as `wzbot` from `/home/ubuntu/WZ2100-SmartAH_Scripts`
+  (single repo clone, `wz_backend=system`,
+  `wz_binary=/usr/games/warzone2100.real`). `wzbot` is in the `ubuntu`
+  group so it can read the repo and write `instance_configs/`; the
+  `/home/wzbot/WZ` clone was removed as redundant 2026-10-18.
 - Proxy runs as `ubuntu` in tmux session `MITM`
   (`python3 lobby_mitm.py --port 18080 ...`); restart with the same command
   if it ever dies (WZ keeps running unlisted meanwhile).
