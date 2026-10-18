@@ -2358,6 +2358,33 @@ def shutdown(signum=None, frame=None):
 
     sys.exit(0)
 
+def refresh_released_mods():
+    """Fetch the latest released .wz mods before staging. Best effort.
+
+    Every instance performs this itself at startup, so any newly published
+    release is picked up by the next instance (successor, migration or fresh
+    deploy) without operator action. Never fatal and never slow: a failed or
+    slow refresh just keeps whatever is already on disk.
+    """
+    script = os.path.join(SCRIPT_DIR, "update_mods.sh")
+    if not os.path.isfile(script):
+        return
+    try:
+        result = subprocess.run(
+            ["bash", script], cwd=SCRIPT_DIR, capture_output=True, text=True,
+            timeout=180, stdin=subprocess.DEVNULL,
+        )
+        for line in (result.stdout or "").splitlines():
+            line = line.strip()
+            if line:
+                log("MODS", line.replace("[mods] ", ""))
+        if result.returncode != 0:
+            log("WARN", f"Mod refresh exited {result.returncode}; using mods on disk.")
+    except subprocess.TimeoutExpired:
+        log("WARN", "Mod refresh timed out; using mods on disk.")
+    except Exception as e:
+        log("WARN", f"Mod refresh failed ({e}); using mods on disk.")
+
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
 def main():
@@ -2397,6 +2424,10 @@ def main():
     current_map_name = config.get("map_name", "")
     entry = wz_config.get_map_entry(config.get("maps"), current_map_name)
     current_map_mods = list(spawn_mods) if spawn_mods else (list(entry["mods"]) if entry else [])
+
+    # Pull any newly published mod release before validating/staging so this
+    # instance launches with the newest version. Runs in this new process only.
+    refresh_released_mods()
 
     for problem in wz_config.validate_config(config.get("maps"), MAPS_DIR, MODS_DIR, config.get("map_name")):
         log("WARN", f"Config validation: {problem}")
