@@ -1,6 +1,6 @@
 **Warzone 2100 Mod: More Fortress**
 
-Adds 4 new Fortress defenses, 1 ATGM emplacement, and 1 new tank weapon to skirmish and multiplayer.
+Adds 5 new Fortress defenses, 1 ATGM emplacement, and 1 new tank weapon to skirmish and multiplayer.
 
 ## Installation
 
@@ -41,6 +41,33 @@ Laser Fortress:
 - Very good against cyborgs, weak against medium and heavy tanks
 - Counter with artillery or a rush of medium tanks
 
+M1299 Howitzer Fortress:
+- Research "M1299 Howitzer Fortress" after
+  "Heavy Howitzer - Ground Shaker" (`R-Wpn-HvyHowitzer`)
+  and "Supercrete Mk2" (`R-Defense-WallUpgrade05`)
+- Indirect fire: shells arc over your walls, so it has no line-of-sight requirement
+- Range 5 to 80 tiles, best accuracy from 30 to 80 tiles out
+- Fires once every 17 seconds, hitting about 4 times as hard as the
+  stock Ground Shaker emplacement once you account for accuracy
+- 1400 direct damage and 1400 splash across a 4-tile blast
+- Accuracy is 65% at long range and 50% up close, so roughly a third
+  of shells miss: it is artillery, not a precision gun
+- Leaves the ground scorched for 2.5 seconds
+- Very heavy turret, turns slowly and rocks back hard on every shot
+- Cannot hit anything closer than 5 tiles, so keep your attackers at range
+- Countered by fast movers at long range, since the shell arcs slowly
+  and lands where the target was
+
+## Research upgrades
+
+Fortress Sensor Upgrade:
+- Research "Fortress Sensor Upgrade" after "Sensor Upgrade Mk3"
+  (`R-Sys-Sensor-Upgrade03`)
+- Raises the detection range of every fortress's built-in sensor from
+  12 tiles to 18 tiles, matching the Wide Spectrum Sensor
+- Affects only fortresses that use the Fortress Sensor, so your other
+  buildings keep their normal sight
+
 ## New weapon
 
 Anti-Tank Guided Missile Launcher:
@@ -48,3 +75,9 @@ Anti-Tank Guided Missile Launcher:
 - Research "Anti-Tank Guided Missile Launcher" after
   "Lancer AT Rocket" (`R-Wpn-Rocket01-LtAT`)
 - Very long range anti-tank rockets, best at standoff distance
+- Fires a ripple of 4 blue missiles, then waits 20 seconds to reload
+- Each missile hits as hard as a stock Lancer, but you get twice as many
+  per salvo, so sustained damage is about 1.5 times a Lancer
+- Rockets are slow and must be led well ahead of moving targets
+- Cannot engage anything inside 5 tiles, so it needs to be well back
+- Counter with fast light units that close the distance

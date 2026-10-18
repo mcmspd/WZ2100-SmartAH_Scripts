@@ -58,6 +58,21 @@
   ],
   "statID": "X-Super-Flame"
  },
+ "R-Defense-Super-Howitzer": {
+  "iconID": "IMAGE_RES_DEFENCE",
+  "id": "R-Defense-Super-Howitzer",
+  "name": "M1299 Howitzer Fortress",
+  "requiredResearch": [
+   "R-Wpn-HvyHowitzer",
+   "R-Defense-WallUpgrade05"
+  ],
+  "researchPoints": 14000,
+  "researchPower": 437,
+  "resultStructures": [
+   "X-Super-Howitzer"
+  ],
+  "statID": "X-Super-Howitzer"
+ },
  "R-Defense-Super-Laser": {
   "iconID": "IMAGE_RES_DEFENCE",
   "id": "R-Defense-Super-Laser",
@@ -72,6 +87,28 @@
    "X-Super-Laser"
   ],
   "statID": "X-Super-Laser"
+ },
+ "R-Sys-Sensor-FortressUpgrade": {
+  "category": "Sensor",
+  "iconID": "IMAGE_RES_SYSTEMTECH",
+  "id": "R-Sys-Sensor-FortressUpgrade",
+  "imdName": "GNLSNSR1.PIE",
+  "name": "Fortress Sensor Upgrade",
+  "requiredResearch": [
+   "R-Sys-Sensor-Upgrade03"
+  ],
+  "researchPoints": 9000,
+  "researchPower": 281,
+  "results": [
+   {
+    "class": "Sensor",
+    "filterParameter": "Id",
+    "filterValue": "FortressSensor",
+    "parameter": "Range",
+    "value": 48
+   }
+  ],
+  "subgroupIconID": "IMAGE_RES_GRPUPG"
  },
  "R-Wpn-Rocket-ATGM": {
   "iconID": "IMAGE_RES_WEAPONTECH",

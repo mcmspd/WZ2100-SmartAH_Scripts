@@ -112,5 +112,28 @@
    "LaserSuper"
   ],
   "width": 2
- }
+  },
+  "X-Super-Howitzer": {
+   "armour": 15,
+   "breadth": 2,
+   "buildPoints": 2000,
+   "buildPower": 1000,
+   "combinesWithWall": true,
+   "height": 4,
+   "hitpoints": 4000,
+   "id": "X-Super-Howitzer",
+   "name": "M1299 Howitzer Fortress",
+   "resistance": 100,
+   "sensorID": "FortressSensor",
+   "strength": "HARD",
+   "structureModel": [
+    "stwpfcan.pie"
+   ],
+   "thermal": 15,
+   "type": "FORTRESS",
+   "weapons": [
+    "HowitzerSuper"
+   ],
+   "width": 2
+  }
 }
