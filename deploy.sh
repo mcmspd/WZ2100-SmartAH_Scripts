@@ -41,6 +41,15 @@ require_root() {
     fi
 }
 
+# ── Step 0: Refresh released mods from GitHub ───────────────────────────
+update_mods() {
+    if [ -x "$REPO_DIR/update_mods.sh" ]; then
+        "$REPO_DIR/update_mods.sh" || warn "mod refresh failed; continuing with current mods"
+    else
+        warn "update_mods.sh not found; skipping mod refresh"
+    fi
+}
+
 # ── Step 1: System dependencies ──────────────────────────────────────────
 install_deps() {
     log "Installing system dependencies..."
@@ -283,6 +292,7 @@ case "$cmd" in
         generate_config
         setup_dirs
         check_wz
+        update_mods
         start_proxy
         add_redirect_rule
         start_instance
@@ -290,6 +300,7 @@ case "$cmd" in
         ;;
     start)
         require_root
+        update_mods
         start_proxy
         add_redirect_rule
         start_instance

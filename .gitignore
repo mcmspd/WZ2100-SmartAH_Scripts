@@ -5,3 +5,4 @@ __pycache__/
 *.log.*
 mitm-ca/
 WZ_*.log
+mods/*.wz
