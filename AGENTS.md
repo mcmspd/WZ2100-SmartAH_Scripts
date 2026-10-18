@@ -66,8 +66,13 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
   letters/digits/space only — migration suffix is `" 2"`. Every new suffix
   must pass `is_lobby_safe_name` AND one spaced live POST before use;
   `nametest.py` is the tool for that.
-- One listing per public IP: free the slot with an authenticated Python
-  DELETE (captured hostToken) before any new POST; never overlap listings.
+- One LISTING per public IP (not one session): at most one lobby listing
+  at a time. Running games do NOT count — stock WZ auto-unlists on match
+  start, so N concurrent games + 1 listed lobby is normal steady state.
+  NEVER kill sessions just because multiple WZ_* exist; check the public
+  listing count and per-session game state first. Free the slot with an
+  authenticated Python DELETE (captured hostToken) before any new POST;
+  never overlap listings.
 
 ## Completed 2026-10-16 (verified: `py_compile`, `python3 -m unittest` OK)
 - Redirect readiness: triple-gate (`lobby_id` + `stdin_ready` + `room_state=="lobby"` + localhost port probe) via `maybe_signal_ready`/`check_lobby_ready`; startup polls `status` until `LOBBY_ID_TIMEOUT`.
@@ -80,7 +85,7 @@ Per-instance Warzone 2100 autohost bot. Single file `instance_bot.py` (~1605 lin
 - Per-map mods: `mods/` mirrors `maps/`; `--mod_mp` staging into `<configdir>/mods/multiplay/`; name validation + fail-fast.
 - Config-driven `"maps": [{name, mods}]` (dir scan is back-compat fallback); `/maps` annotates mods; spawn/timeout thread name+mods through.
 - Game-start successor: stock WZ unlists on match start, so `startMultiplayerGame` spawns a base-name successor lobby (same map+mods) to cover the running game; post-game the parent hands players over via the relay redirect and exits (no per-game leak); crash respawn yields when the successor is live.
-- Single-listing invariant (lobby accepts double POSTs): crash/game-start spawns check the public list first and skip when our name family is already listed (own ID excluded); every migration enforces it post-handover (DELETE others, keep the successor).
+- Single-listing invariant (lobby accepts double POSTs): crash/game-start spawns check the public list first and skip when our name family is already listed (own ID excluded); every migration enforces it post-handover (DELETE others, keep the successor). The invariant counts LISTINGS only — running (auto-unlisted) games never trigger it; `max_live_sessions` is a resource cap, not the listing rule. Incident 2026-10-18: 2 live games + 1 lobby were wrongly treated as a violation and killed with players inside.
 - `save_authorized_pkeys` locked (dedicated `.lock` file + atomic replace); `get_public_ip` cached (`PUBLIC_IP_TTL`) with fallback providers; size-based log rotation; `open_ports.sh` idempotent + `install_dep.sh` hardened; `README.md`; `test_instance_bot.py` + `test_lobby_mitm.py` (run: `python3 -m unittest`).
 
 ## Remaining polish
