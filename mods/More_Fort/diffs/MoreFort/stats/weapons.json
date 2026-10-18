@@ -64,7 +64,7 @@
   "model": "ag_barrel_3x.pie",
   "mountModel": "trwpfcan.pie",
   "movement": "DIRECT",
-  "muzzleGfx": "fxmgnvul-2x.pie",
+  "muzzleGfx": "fxmgnvul-mf-2x.pie",
   "name": "Assault Gun Fortress",
   "numExplosions": 1,
   "recoilValue": 100,
