@@ -6,7 +6,7 @@
     "difficulty": false,
     "ai": false,
     "scavengers": true,
-    "position": false,
+    "position": true,
     "bases": true,
     "readybeforefull": false
   },
