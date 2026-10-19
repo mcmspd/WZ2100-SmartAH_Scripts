@@ -195,6 +195,57 @@ def clear_session_status(session_name: str):
     except Exception:
         pass
 
+
+def get_all_sessions_info() -> list:
+    """Get info about all live WZ_* sessions: name, port, lobby_id, status,
+    player count, spectator count."""
+    sessions = []
+    try:
+        result = subprocess.run(
+            ["tmux", "ls", "-F", "#{session_name}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return sessions
+        for line in result.stdout.splitlines():
+            session_name = line.strip()
+            if not session_name.startswith("WZ_"):
+                continue
+            info = {"session": session_name}
+            status = read_session_status(session_name)
+            if status:
+                info["port"] = status.get("port")
+                info["lobby_id"] = status.get("lobby_id")
+                info["status"] = status.get("status")
+                info["error"] = status.get("error")
+            players, spectators = get_room_status_from_log(session_name)
+            if players is not None:
+                info["players"] = players
+                info["spectators"] = spectators
+            sessions.append(info)
+    except Exception:
+        pass
+    return sessions
+
+
+def get_room_status_from_log(session_name: str) -> tuple | None:
+    """Read the latest STATUS line from a session log and return
+    (player_count, spectator_count) or None if not found."""
+    log_path = os.path.join(SCRIPT_DIR, f"{session_name}.log")
+    if not os.path.exists(log_path):
+        return None
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        for line in reversed(lines):
+            if "STATUS" in line and "players=" in line and "spectators=" in line:
+                m = re.search(r"players=(\d+)\s*\|\s*spectators=(\d+)", line)
+                if m:
+                    return int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+    return None
+
 RATE_LIMIT_BACKOFF = 1200  # seconds to wait before retrying after lobby rate-limit
 
 
@@ -1827,13 +1878,21 @@ def _handle_chat_cmd(sender_slot: int, sender_pk: str | None, sender_name: str, 
     # ── /report ────────────────────────────────────────────────────────────────
     if msg_lower == "/report":
         ip_addr = get_public_ip()
+        sessions = get_all_sessions_info()
         lines = [
             "=== Server Report ===",
             f"CPU Load: {get_cpu_load()}",
             f"RAM Usage: {get_ram_usage()}",
             f"Address: {ip_addr}:{port_global}",
             f"Session Time Remaining: {get_session_remaining()}",
+            f"Active Sessions: {len(sessions)}",
         ]
+        for s in sessions:
+            players = s.get("players", "?")
+            specs = s.get("spectators", "?")
+            port = s.get("port", "?")
+            st = s.get("status", "?")
+            lines.append(f"  {s['session']}: port={port}, players={players}, specs={specs}, status={st}")
         if sender_pk:
             for l in lines:
                 dm(sender_pk, l)
