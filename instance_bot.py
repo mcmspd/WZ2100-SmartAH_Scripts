@@ -17,6 +17,7 @@ import lobby_mitm
 import wz_config
 import os
 import select
+import shlex
 import signal
 import subprocess
 import sys
@@ -503,11 +504,13 @@ def spawn_new_instance(map_name: str, mods: list | None = None,
     mod_suffix = f" +{len(mods)} mod(s)" if mods else ""
     log("INFO", f"Spawning new instance {session_name} on port {port} with map {map_name}{mod_suffix}")
     clear_session_status(session_name)
-    cmd = [
-        "tmux", "new-session", "-d", "-s", session_name,
-        "python3", os.path.join(SCRIPT_DIR, "instance_bot.py"),
-        str(port), session_name, map_name, ",".join(mods), name_suffix,
-    ]
+    # NOTE: the game user has shell /usr/sbin/nologin and tmux runs the
+    # session command via the user's login shell — invoke bash explicitly.
+    inner = " ".join(shlex.quote(p) for p in
+                     ["python3", os.path.join(SCRIPT_DIR, "instance_bot.py"),
+                      str(port), session_name, map_name, ",".join(mods), name_suffix])
+    cmd = ["tmux", "new-session", "-d", "-s", session_name,
+           "/bin/bash", "-c", f"exec {inner}"]
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return port, session_name
 

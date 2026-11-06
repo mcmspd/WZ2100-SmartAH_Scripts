@@ -262,8 +262,10 @@ start_instance() {
         return 0
     fi
 
-    sudo -u "$GAME_USER" tmux new-session -d -s "$SESSION_NAME" \
-        "cd $REPO_DIR && python3 instance_bot.py $GAME_PORT $SESSION_NAME $MAP_NAME"
+    # NOTE: $GAME_USER has shell /usr/sbin/nologin, and tmux runs the
+    # session command via the user's login shell — so invoke bash explicitly.
+    sudo -u "$GAME_USER" tmux new-session -d -s "$SESSION_NAME" /bin/bash -c \
+        "cd $REPO_DIR && exec python3 instance_bot.py $GAME_PORT $SESSION_NAME $MAP_NAME"
 
     log "Waiting for lobby readiness (~60s)..."
     for i in $(seq 1 12); do
