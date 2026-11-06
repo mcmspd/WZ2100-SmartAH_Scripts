@@ -211,8 +211,12 @@ setup_dirs() {
     mkdir -p "$REPO_DIR/instance_configs" "$REPO_DIR/maps" "$REPO_DIR/mods" "$REPO_DIR/autohost"
 
     # wzbot needs write access to instance_configs (status, logs, .relay_target)
+    # and the proxy user needs write access too (token store, blocklist).
+    # Owner = proxy user, group = game user, group-writable.
     chown -R "$GAME_USER:$GAME_USER" "$REPO_DIR/instance_configs"
-    chmod 755 "$REPO_DIR" "$REPO_DIR/instance_configs"
+    chown "$PROXY_USER:$GAME_USER" "$REPO_DIR/instance_configs"
+    chmod 775 "$REPO_DIR/instance_configs"
+    chmod 755 "$REPO_DIR"
 
     # wzbot needs write access to repo root for log files (WZ_PROD.log)
     chmod g+w "$REPO_DIR"
@@ -305,6 +309,27 @@ add_redirect_rule() {
     netfilter-persistent save 2>/dev/null || true
 }
 
+# ── Step 8b: Force lobby HTTPS onto IPv4 for the game user ───────────────
+# WZ prefers IPv6 when AAAA exists, bypassing the IPv4-only REDIRECT above
+# (no token capture → map change and migration abort). REJECT gives instant
+# fallback to IPv4, which the proxy then intercepts.
+add_ipv6_fallback_rule() {
+    log "Forcing IPv4 lobby traffic for $GAME_USER (reject IPv6 443)..."
+    if command -v ip6tables &>/dev/null; then
+        if ip6tables -C OUTPUT -m owner --uid-owner "$GAME_USER" -p tcp --dport 443 \
+            -j REJECT --reject-with icmp6-adm-prohibited 2>/dev/null; then
+            log "IPv6 fallback rule already present."
+        else
+            ip6tables -A OUTPUT -m owner --uid-owner "$GAME_USER" -p tcp --dport 443 \
+                -j REJECT --reject-with icmp6-adm-prohibited
+            log "IPv6 fallback rule added."
+        fi
+        netfilter-persistent save 2>/dev/null || true
+    else
+        warn "ip6tables missing; IPv6 lobby bypass possible."
+    fi
+}
+
 # ── Step 9: Start game instance ──────────────────────────────────────────
 start_instance() {
     log "Starting game instance on port $GAME_PORT (map: $MAP_NAME)..."
@@ -363,6 +388,7 @@ case "$cmd" in
         start_proxy
         install_mitm_ca
         add_redirect_rule
+        add_ipv6_fallback_rule
         start_instance
         log "Deployment complete. Verify with: $0 status"
         ;;
@@ -373,6 +399,7 @@ case "$cmd" in
         start_proxy
         install_mitm_ca
         add_redirect_rule
+        add_ipv6_fallback_rule
         start_instance
         ;;
     stop)

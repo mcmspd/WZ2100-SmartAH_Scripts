@@ -516,8 +516,12 @@ class TokenSniffer:
         found = extract_tokens(self.buf)
         if found and found["game_id"] not in self.done_ids:
             self.done_ids.add(found["game_id"])
-            store_token(self.store_path, found["game_id"],
-                        found["host_token"], found.get("lobby_token"))
+            try:
+                store_token(self.store_path, found["game_id"],
+                            found["host_token"], found.get("lobby_token"))
+            except Exception as e:
+                log(f"token store FAILED for game {found['game_id']}: "
+                    f"{type(e).__name__}: {e}")
 
 
 def strip_accept_encoding(head: bytes) -> bytes:
