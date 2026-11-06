@@ -298,16 +298,19 @@ def check_lobby_ready() -> bool:
         return False
 
 
-def verify_lobby_listed(lobby_id: str, timeout: float = 30.0) -> bool:
+def verify_lobby_listed(lobby_id: str, timeout: float = 120.0) -> bool:
     """Verify the instance actually appears in the public lobby listing.
 
     After WZ reports it's ready, confirm the listing is visible on the
-    public lobby. Fetch failures don't count (lobby hiccups must not fail
+    public lobby. The lobby typically publishes on the first keepalive
+    PATCH (up to ~30s after POST), so the window must comfortably exceed
+    that. Fetch failures don't count (lobby hiccups must not fail
     a healthy instance); only successful fetches missing our ID advance
     the deadline. Returns False only when fetches succeed but the ID is
     absent for the whole window. Never raises.
     """
     deadline = time.time() + timeout
+    last_note = 0.0
     while time.time() < deadline:
         try:
             games = lobby_mitm.list_lobby_games(strict=True)
@@ -317,6 +320,10 @@ def verify_lobby_listed(lobby_id: str, timeout: float = 30.0) -> bool:
         for g in games:
             if g.get("id") == lobby_id:
                 return True
+        if time.time() - last_note >= 20:
+            last_note = time.time()
+            log("INFO", f"Still waiting for lobby listing {lobby_id} "
+                        f"({int(deadline - time.time())}s left).")
         time.sleep(2)
     return False
 
