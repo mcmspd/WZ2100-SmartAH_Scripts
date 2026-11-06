@@ -133,14 +133,22 @@ def ensure_ca(ca_dir: str) -> tuple[str, str]:
     crt = os.path.join(ca_dir, "ca.crt")
     if not (os.path.exists(key) and os.path.exists(crt)):
         log(f"Generating MITM CA in {ca_dir} (keep ca.key secret!)")
-        subprocess.run(
-            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-             "-keyout", key, "-out", crt, "-days", "825",
-             "-subj", "/CN=WZ2100-Lobby-MITM",
-             "-addext", "basicConstraints=critical,CA:TRUE",
-             "-addext", "keyUsage=critical,keyCertSign,cRLSign"],
-            check=True, capture_output=True,
-        )
+        base = ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                "-keyout", key, "-out", crt, "-days", "825",
+                "-subj", "/CN=WZ2100-Lobby-MITM"]
+        full = base + ["-addext", "basicConstraints=critical,CA:TRUE",
+                       "-addext", "keyUsage=critical,keyCertSign,cRLSign"]
+        try:
+            subprocess.run(full, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            err = (e.stderr or "")[-500:]
+            log(f"CA gen with -addext failed ({e.returncode}): {err.strip()} — retrying without extensions")
+            try:
+                subprocess.run(base, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e2:
+                err2 = (e2.stderr or "")[-500:]
+                log(f"CA gen failed ({e2.returncode}): {err2.strip()}")
+                raise
         os.chmod(key, 0o600)
     return key, crt
 
@@ -157,17 +165,25 @@ def ensure_server_cert(ca_key: str, ca_crt: str, certs_dir: str, sni: str) -> tu
         ext = os.path.join(certs_dir, f"{safe}.ext")
         with open(ext, "w", encoding="utf-8") as f:
             f.write(f"subjectAltName=DNS:{sni}\n")
-        subprocess.run(
-            ["openssl", "req", "-newkey", "rsa:2048", "-nodes",
-             "-keyout", key, "-out", csr, "-subj", f"/CN={sni}"],
-            check=True, capture_output=True,
-        )
-        subprocess.run(
-            ["openssl", "x509", "-req", "-in", csr,
-             "-CA", ca_crt, "-CAkey", ca_key, "-CAcreateserial",
-             "-days", "825", "-extfile", ext, "-out", crt],
-            check=True, capture_output=True,
-        )
+        try:
+            subprocess.run(
+                ["openssl", "req", "-newkey", "rsa:2048", "-nodes",
+                 "-keyout", key, "-out", csr, "-subj", f"/CN={sni}"],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            log(f"cert req failed for {sni} ({e.returncode}): {(e.stderr or '').strip()[-300:]}")
+            raise
+        try:
+            subprocess.run(
+                ["openssl", "x509", "-req", "-in", csr,
+                 "-CA", ca_crt, "-CAkey", ca_key, "-CAcreateserial",
+                 "-days", "825", "-extfile", ext, "-out", crt],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            log(f"cert sign failed for {sni} ({e.returncode}): {(e.stderr or '').strip()[-300:]}")
+            raise
         for tmpf in (csr, ext):
             try:
                 os.remove(tmpf)

@@ -204,6 +204,8 @@ start_proxy() {
     fi
 
     mkdir -p "$REPO_DIR/mitm-ca"
+    # mkdir ran as root; proxy runs as $PROXY_USER and must write certs here.
+    chown -R "$PROXY_USER:$PROXY_USER" "$REPO_DIR/mitm-ca" 2>/dev/null || chown -R "$PROXY_USER" "$REPO_DIR/mitm-ca"
 
     # Proxy runs as the invoking user (ubuntu), NOT as wzbot — UID separation is critical.
     sudo -u "$PROXY_USER" setsid nohup python3 "$REPO_DIR/lobby_mitm.py" \
