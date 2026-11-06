@@ -296,6 +296,48 @@ def check_lobby_ready() -> bool:
         return False
 
 
+def verify_lobby_listed(lobby_id: str, timeout: float = 30.0) -> bool:
+    """Verify the instance actually appears in the public lobby listing.
+
+    After WZ reports it's ready, confirm the listing is visible on the
+    public lobby. If not listed within `timeout` seconds, return False.
+    Never raises: failures yield False (callers treat unknown as unlisted).
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            games = lobby_mitm.list_lobby_games()
+            for g in games:
+                if g.get("id") == lobby_id:
+                    return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
+
+
+def _health_check_loop(lobby_id: str, stop_event: threading.Event,
+                       interval: float = 60.0) -> None:
+    """Periodically verify the instance remains listed in the public lobby.
+
+    If the listing is lost (proxy failure, etc.), set stop_event to signal
+    the main loop to restart. Never raises.
+    """
+    while not stop_event.is_set():
+        stop_event.wait(interval)
+        if stop_event.is_set():
+            break
+        try:
+            games = lobby_mitm.list_lobby_games()
+            listed = any(g.get("id") == lobby_id for g in games)
+        except Exception:
+            listed = False
+        if not listed:
+            log("HEALTH", f"Lobby listing {lobby_id} lost; triggering restart.")
+            stop_event.set()
+            break
+
+
 def maybe_signal_ready():
     """Signal startup completion once all readiness gates pass."""
     if lobby_id and stdin_ready and room_state == "lobby" and not startup_status_event.is_set():
@@ -1343,11 +1385,23 @@ def _start_timeout_expired():
         log("TIMEOUT", f"{mins}-minute start window expired. Spawning new instance to migrate players...")
         bcast("Lobby timeout expired. Spinning up new instance, this usually takes about 60 seconds...")
         if not unlist_self_via_api():
-            log("WARN", "Aborting migration: lobby slot still held and no token to free it.")
-            bcast("Migration aborted: could not free the lobby slot. Admins, check the lobby proxy.")
-            with migration_lock:
-                migration_attempts += 1
-            return
+            # DELETE failed (proxy unreachable, bad response, etc.).
+            # Force-kill the WZ process — its keepalive will stop, the lobby
+            # will abandon the listing, freeing the slot. Then retry unlist.
+            log("WARN", "unlist_self_via_api() failed; force-killing WZ to release lobby slot.")
+            if process and process.poll() is None:
+                try:
+                    process.kill()
+                    process.wait(timeout=10)
+                except Exception:
+                    pass
+            time.sleep(3)  # let lobby abandonment propagate
+            if not unlist_self_via_api():
+                log("WARN", "Aborting migration: lobby slot still held after force-kill.")
+                bcast("Migration aborted: could not free the lobby slot. Admins, check the lobby proxy.")
+                with migration_lock:
+                    migration_attempts += 1
+                return
         spawned = spawn_new_instance(current_map_name or config.get("map_name", ""),
                                      list(current_map_mods),
                                      name_suffix=config.get("migration_name_suffix", MIGRATION_NAME_SUFFIX))
@@ -2584,6 +2638,11 @@ def main():
 
         if check_lobby_ready():
             verification_failure = None
+            # Confirm the instance is actually visible in the public lobby.
+            # A "ready" gate can pass while the lobby POST never succeeds
+            # (e.g. proxy returning invalid JSON); catch that here.
+            if not verify_lobby_listed(lobby_id):
+                verification_failure = "lobby listing not visible"
         elif startup_error:
             verification_failure = startup_error
         elif not lobby_id:
@@ -2595,7 +2654,34 @@ def main():
             log("INFO", f"Lobby ready after launch: id={lobby_id} port={port_global}")
             write_session_status(session_global, "ready", port_global, lobby_id=lobby_id)
             publish_relay_target(port_global)
-            process.wait()
+            # Periodic health check: verify we remain listed in the lobby.
+            # If the proxy breaks mid-session, the instance goes dark and
+            # new players can't find us. Restart if listing is lost.
+            health_stop = threading.Event()
+            health_thread = threading.Thread(
+                target=_health_check_loop,
+                args=(lobby_id, health_stop, 60.0),
+                daemon=True, name="lobby-health",
+            )
+            health_thread.start()
+            # Poll process instead of blocking wait, so health check can
+            # interrupt and trigger a restart when listing is lost.
+            while True:
+                rc = process.poll()
+                if rc is not None:
+                    break  # WZ exited on its own
+                if health_stop.is_set():
+                    log("HEALTH", "Listing lost; shutting down WZ for restart.")
+                    try:
+                        send_cmd("shutdown now")
+                        process.wait(timeout=10)
+                    except Exception:
+                        process.kill()
+                        process.wait()
+                    break
+                time.sleep(2)
+            health_stop.set()
+            health_thread.join(timeout=5)
         else:
             if verification_failure.startswith("lobbyerror"):
                 failure_description = verification_failure

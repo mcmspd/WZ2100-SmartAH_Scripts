@@ -79,7 +79,7 @@ create_user() {
         log "User $GAME_USER already exists."
     else
         log "Creating system user $GAME_USER..."
-        useradd --system --group --no-create-home --shell /usr/sbin/nologin "$GAME_USER" 2>/dev/null || true
+        useradd --system --user-group --no-create-home --shell /usr/sbin/nologin "$GAME_USER"
     fi
 
     # wzbot must be in ubuntu group to read files under /home/ubuntu

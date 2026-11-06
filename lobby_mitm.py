@@ -390,9 +390,12 @@ def delete_listing_by_game_id(game_id: str, store_path: str = TOKEN_STORE_DEFAUL
 BUF = 65536
 
 
-def _pump(src: socket.socket, dst: socket.socket, sniffer=None):
+def _pump(src: socket.socket, dst: socket.socket, sniffer=None,
+          error_event=None):
     try:
         while True:
+            if error_event is not None and error_event.is_set():
+                break
             chunk = src.recv(BUF)
             if not chunk:
                 break
@@ -401,9 +404,16 @@ def _pump(src: socket.socket, dst: socket.socket, sniffer=None):
                     sniffer(chunk)
                 except Exception:
                     pass
-            dst.sendall(chunk)
+            try:
+                dst.sendall(chunk)
+            except Exception:
+                # Downstream gone: signal the other pump to stop.
+                if error_event is not None:
+                    error_event.set()
+                break
     except Exception:
-        pass
+        if error_event is not None:
+            error_event.set()
     finally:
         for s in (src, dst):
             try:
@@ -506,7 +516,10 @@ def strip_accept_encoding(head: bytes) -> bytes:
 def handle_client(client: socket.socket, sni_allow: list, ca_key: str, ca_crt: str,
                   certs_dir: str, store_path: str, upstream_cafile: str | None = None,
                   blocklist_path: str | None = None,
-                  forge_join_checks: bool = False):
+                  forge_join_checks: bool = False,
+                  upstream_connect_timeout: int = 15,
+                  upstream_retries: int = 3,
+                  upstream_backoff_base: float = 2.0):
     try:
         client.settimeout(15)
         orig_dst = get_original_dst(client)
@@ -545,7 +558,9 @@ def handle_client(client: socket.socket, sni_allow: list, ca_key: str, ca_crt: s
             # Incomplete TLS record: loop and wait for the rest.
         if sni and sni in sni_allow:
             handle_intercepted(client, sni, orig_dst, ca_key, ca_crt, certs_dir, store_path,
-                                 upstream_cafile, blocklist_path, forge_join_checks)
+                                 upstream_cafile, blocklist_path, forge_join_checks,
+                                 upstream_connect_timeout, upstream_retries,
+                                 upstream_backoff_base)
         else:
             # Not TLS or not our target: nothing consumed, relay as-is.
             handle_passthrough_prefixed(client, b"", orig_dst, sni)
@@ -561,7 +576,10 @@ def handle_intercepted(client: socket.socket, sni: str, orig_dst: tuple[str, int
                                ca_key: str, ca_crt: str, certs_dir: str, store_path: str,
                                upstream_cafile: str | None = None,
                                blocklist_path: str | None = None,
-                               forge_join_checks: bool = False):
+                               forge_join_checks: bool = False,
+                               upstream_connect_timeout: int = 15,
+                               upstream_retries: int = 3,
+                               upstream_backoff_base: float = 2.0):
     upstream_host = orig_dst[0] if orig_dst else sni
     upstream_port = orig_dst[1] if orig_dst else 443
     crt, key = ensure_server_cert(ca_key, ca_crt, certs_dir, sni)
@@ -573,7 +591,7 @@ def handle_intercepted(client: socket.socket, sni: str, orig_dst: tuple[str, int
     try:
         tls_client = server_ctx.wrap_socket(client, server_side=True)
         head = b""
-        tls_client.settimeout(15)
+        tls_client.settimeout(upstream_connect_timeout)
         while b"\r\n\r\n" not in head and len(head) < 65536:
             chunk = tls_client.recv(BUF)
             if not chunk:
@@ -608,16 +626,48 @@ def handle_intercepted(client: socket.socket, sni: str, orig_dst: tuple[str, int
             except Exception:
                 pass
             return
-        upstream_ctx = (_ssl.create_default_context(cafile=upstream_cafile)
-                          if upstream_cafile else _ssl.create_default_context())
-        upstream = upstream_ctx.wrap_socket(
-            socket.create_connection((upstream_host, upstream_port), timeout=15),
-            server_hostname=sni,
-        )
+        # ── upstream connect with retry + backoff ──
+        retries = upstream_retries
+        backoff = upstream_backoff_base
+        last_err = None
+        for attempt in range(1, retries + 1):
+            try:
+                upstream_ctx = (_ssl.create_default_context(cafile=upstream_cafile)
+                                  if upstream_cafile else _ssl.create_default_context())
+                upstream = upstream_ctx.wrap_socket(
+                    socket.create_connection((upstream_host, upstream_port),
+                                             timeout=upstream_connect_timeout),
+                    server_hostname=sni,
+                )
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < retries:
+                    delay = backoff * (2 ** (attempt - 1))
+                    log(f"upstream connect attempt {attempt}/{retries} for {sni} "
+                        f"failed ({type(e).__name__}: {e}), retrying in {delay}s")
+                    time.sleep(delay)
+                else:
+                    log(f"upstream connect failed after {retries} attempts for {sni}: "
+                        f"{type(e).__name__}: {e}")
+        if upstream is None:
+            # Upstream unreachable: send a valid HTTP 502 so WZ doesn't hang
+            body = b'{"error": "upstream_unavailable", "detail": "lobby unreachable"}'
+            resp = (b"HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\n"
+                    b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+                    b"Connection: close\r\n\r\n" + body)
+            try:
+                tls_client.sendall(resp)
+            except Exception:
+                pass
+            return
         upstream.sendall(head + rest)
         sniffer = TokenSniffer(store_path)
-        t1 = threading.Thread(target=_pump, args=(tls_client, upstream), daemon=True)
-        t2 = threading.Thread(target=_pump, args=(upstream, tls_client, sniffer), daemon=True)
+        error_event = threading.Event()
+        t1 = threading.Thread(target=_pump, args=(tls_client, upstream, None,
+                                                  error_event), daemon=True)
+        t2 = threading.Thread(target=_pump, args=(upstream, tls_client, sniffer,
+                                                  error_event), daemon=True)
         t1.start()
         t2.start()
         t1.join()
@@ -679,7 +729,10 @@ def serve(port: int, sni_allow: list, ca_dir: str, certs_dir: str, store_path: s
           upstream_cafile: str | None = None, blocklist_path: str | None = None,
           forge_join_checks: bool = False,
           game_relay_port: int | None = None, relay_target_file: str | None = None,
-          relay_default_port: int = 2100):
+          relay_default_port: int = 2100,
+          upstream_connect_timeout: int = 15,
+          upstream_retries: int = 3,
+          upstream_backoff_base: float = 2.0):
     ca_key, ca_crt = ensure_ca(ca_dir)
     log(f"CA ready: {ca_crt} (install this cert into the system trust store)")
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -697,7 +750,9 @@ def serve(port: int, sni_allow: list, ca_dir: str, certs_dir: str, store_path: s
             threading.Thread(
                 target=handle_client,
                 args=(conn, sni_allow, ca_key, ca_crt, certs_dir, store_path,
-                      upstream_cafile, blocklist_path, forge_join_checks),
+                      upstream_cafile, blocklist_path, forge_join_checks,
+                      upstream_connect_timeout, upstream_retries,
+                      upstream_backoff_base),
                 daemon=True,
             ).start()
     except KeyboardInterrupt:
@@ -728,11 +783,19 @@ def main():
     ap.add_argument("--relay-target-file", default=None,
                     help="file holding the current gameport (written by the bot)")
     ap.add_argument("--relay-default-port", type=int, default=2100)
+    ap.add_argument("--upstream-connect-timeout", type=int, default=15,
+                    help="seconds to wait for upstream TLS connect (per attempt)")
+    ap.add_argument("--upstream-retries", type=int, default=3,
+                    help="number of upstream TLS connect retries with backoff")
+    ap.add_argument("--upstream-backoff-base", type=float, default=2.0,
+                    help="base seconds for exponential backoff between retries")
     args = ap.parse_args()
     serve(args.port, [s.strip() for s in args.sni.split(",") if s.strip()],
           args.ca, args.certs, args.tokens, args.upstream_cafile, args.blocklist,
           args.forge_join_checks, args.game_relay_port, args.relay_target_file,
-          args.relay_default_port)
+          args.relay_default_port,
+          args.upstream_connect_timeout, args.upstream_retries,
+          args.upstream_backoff_base)
 
 
 if __name__ == "__main__":
