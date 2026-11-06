@@ -163,6 +163,48 @@ EOF
     warn "IMPORTANT: Edit $config and fill in host_key + authorized_pkeys before starting!"
 }
 
+# ── Step 4b: Heal drift in existing instances.json (never touch secrets) ──
+# Fresh template is correct, but long-lived prod configs predate it
+# (e.g. wz_backend=auto + empty wz_binary → bot exits instantly under
+# wzbot, whose PATH lacks /usr/games). Fix known-bad keys only.
+migrate_config() {
+    local config="$REPO_DIR/instances.json"
+    [ -f "$config" ] || return 0
+    python3 - "$config" <<'EOF'
+import json, os, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    d = json.load(f)
+changed = []
+if d.get("wz_backend") in ("", "auto", None):
+    d["wz_backend"] = "system"
+    changed.append("wz_backend=system")
+binary = d.get("wz_binary") or ""
+if not binary or not os.path.exists(binary):
+    for cand in ("/usr/games/warzone2100.real", "/usr/games/warzone2100"):
+        if os.path.exists(cand) and os.access(cand, os.X_OK):
+            d["wz_binary"] = cand
+            changed.append(f"wz_binary={cand}")
+            break
+repo = os.path.dirname(os.path.abspath(path))
+defaults = {
+    "lobby_token_store": os.path.join(repo, "instance_configs", ".lobby_tokens.json"),
+    "lobby_blocklist": os.path.join(repo, "instance_configs", ".lobby_blocklist.json"),
+    "relay_target_file": os.path.join(repo, "instance_configs", ".relay_target"),
+}
+for k, v in defaults.items():
+    if not d.get(k):
+        d[k] = v
+        changed.append(f"{k}=default")
+if changed:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2)
+    print("migrated instances.json: " + ", ".join(changed))
+else:
+    print("instances.json already current.")
+EOF
+}
+
 # ── Step 5: Directories & permissions ────────────────────────────────────
 setup_dirs() {
     log "Setting up directories and permissions..."
@@ -227,6 +269,26 @@ start_proxy() {
     done
     err "Proxy failed to start. Check $REPO_DIR/mitm-proxy.log"
     return 1
+}
+
+# ── Step 7b: Trust the MITM CA system-wide ───────────────────────────────
+# WZ verifies lobby TLS against the system store (cURL error 60 otherwise).
+# Regenerated CAs must be reinstalled — idempotent, updates only on change.
+install_mitm_ca() {
+    local src="$REPO_DIR/mitm-ca/ca.crt"
+    local dst="/usr/local/share/ca-certificates/wz2100-mitm.crt"
+    [ -f "$src" ] || { warn "MITM CA not found at $src; skipping trust install."; return 0; }
+    if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+        log "MITM CA already trusted."
+        return 0
+    fi
+    if ! command -v update-ca-certificates &>/dev/null; then
+        warn "update-ca-certificates missing; install CA manually: $src"
+        return 0
+    fi
+    cp "$src" "$dst"
+    update-ca-certificates 2>&1 | tail -2
+    log "MITM CA installed into system trust store."
 }
 
 # ── Step 8: Redirect game user's lobby HTTPS through proxy ───────────────
@@ -294,10 +356,12 @@ case "$cmd" in
         create_user
         open_ports
         generate_config
+        migrate_config
         setup_dirs
         check_wz
         update_mods
         start_proxy
+        install_mitm_ca
         add_redirect_rule
         start_instance
         log "Deployment complete. Verify with: $0 status"
@@ -305,7 +369,9 @@ case "$cmd" in
     start)
         require_root
         update_mods
+        migrate_config
         start_proxy
+        install_mitm_ca
         add_redirect_rule
         start_instance
         ;;
