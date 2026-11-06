@@ -334,7 +334,9 @@ def _health_check_loop(lobby_id: str, stop_event: threading.Event,
     Fires only after HEALTH_MISS_STRIKES consecutive *successful* fetches
     that lack our ID. Fetch failures reset the count (unknown != lost).
     No checks during grace_period after startup (propagation delay).
-    Never raises.
+    No checks while a game is running or the room is not in lobby state:
+    stock WZ unlists on match start by design, so an absent listing
+    mid-game is expected, not a failure. Never raises.
     """
     start = time.time()
     misses = 0
@@ -343,6 +345,9 @@ def _health_check_loop(lobby_id: str, stop_event: threading.Event,
         if stop_event.is_set():
             break
         if time.time() - start < grace_period:
+            continue
+        if game_started or room_state != "lobby":
+            misses = 0
             continue
         try:
             games = lobby_mitm.list_lobby_games(strict=True)
