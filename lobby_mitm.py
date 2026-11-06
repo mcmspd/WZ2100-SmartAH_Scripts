@@ -356,11 +356,13 @@ def delete_lobby_listing(game_id: str, host_token: str,
 
 
 def list_lobby_games(lobby_address: str = "https://wzlobby.wz2100.net/lobby",
-                     timeout: int = 20) -> list:
+                     timeout: int = 20, strict: bool = False) -> list:
     """Fetch the public game list. Returns [{id, name, map}] (best effort).
 
     Used by the bot to prove the one-listing invariant before spawning.
-    Never raises: failures yield [] (callers treat unknown as unlisted).
+    Unless strict=True, never raises: failures yield [] (callers treat
+    unknown as unlisted). With strict=True, fetch failures raise so callers
+    can tell "lobby unreachable" apart from "not listed".
     """
     import urllib.request
     url = f"{lobby_address.rstrip('/')}/api/v1/games"
@@ -376,6 +378,8 @@ def list_lobby_games(lobby_address: str = "https://wzlobby.wz2100.net/lobby",
             body = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         log(f"public list fetch failed: {e}")
+        if strict:
+            raise
         return []
     for line in body.splitlines():
         line = line.strip()

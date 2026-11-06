@@ -1129,10 +1129,25 @@ class SingleListingTests(unittest.TestCase):
                                         return_value=True) as un, \
              unittest.mock.patch.object(ib, "family_listing_ids",
                                         return_value=["live-id"]), \
+             unittest.mock.patch.object(ib.time, "sleep",
+                                        return_value=None), \
              unittest.mock.patch.object(ib, "spawn_new_instance") as sp:
             ib.maybe_spawn_crash_replacement()
         un.assert_called_once_with()
         sp.assert_not_called()
+
+    def test_crash_spawns_when_coverage_lapses(self):
+        with unittest.mock.patch.object(ib, "record_restart_and_check_cap",
+                                        return_value=True), \
+             unittest.mock.patch.object(ib, "unlist_self_via_api",
+                                        return_value=True), \
+             unittest.mock.patch.object(ib, "family_listing_ids",
+                                        side_effect=[["live-id"], []]), \
+             unittest.mock.patch.object(ib.time, "sleep",
+                                        return_value=None), \
+             unittest.mock.patch.object(ib, "spawn_new_instance") as sp:
+            ib.maybe_spawn_crash_replacement()
+        sp.assert_called_once_with("", [])
 
     def test_crash_spawns_when_clean(self):
         with unittest.mock.patch.object(ib, "record_restart_and_check_cap",

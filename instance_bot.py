@@ -54,6 +54,7 @@ MIGRATION_RETRY_BASE = 600   # seconds: base delay before retrying a failed migr
 MIGRATION_MAX_ATTEMPTS = 3   # give up migration retries after this many failures
 MIGRATION_DRAIN_SECONDS = 600  # seconds to wait for players to rejoin before old shutdown
 MIGRATION_NAME_SUFFIX = " 2"  # appended to the successor lobby name (lobby-safe charset)
+RESPAWN_COVERAGE_RECHECK_SECONDS = 90  # re-check delay when a covering listing races a dying session
 
 # Live-fire result: the lobby rejects brackets/parens (INPUT_VALIDATION_FAILED)
 # even though older listings contain them. Only alphanumerics + space proven.
@@ -301,39 +302,60 @@ def verify_lobby_listed(lobby_id: str, timeout: float = 30.0) -> bool:
     """Verify the instance actually appears in the public lobby listing.
 
     After WZ reports it's ready, confirm the listing is visible on the
-    public lobby. If not listed within `timeout` seconds, return False.
-    Never raises: failures yield False (callers treat unknown as unlisted).
+    public lobby. Fetch failures don't count (lobby hiccups must not fail
+    a healthy instance); only successful fetches missing our ID advance
+    the deadline. Returns False only when fetches succeed but the ID is
+    absent for the whole window. Never raises.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            games = lobby_mitm.list_lobby_games()
-            for g in games:
-                if g.get("id") == lobby_id:
-                    return True
+            games = lobby_mitm.list_lobby_games(strict=True)
         except Exception:
-            pass
+            time.sleep(2)
+            continue
+        for g in games:
+            if g.get("id") == lobby_id:
+                return True
         time.sleep(2)
     return False
 
 
+# Strikes of consecutive confirmed absence before the health check fires.
+# Single-blip suicides killed a live lobby; never again.
+HEALTH_MISS_STRIKES = 3
+
+
 def _health_check_loop(lobby_id: str, stop_event: threading.Event,
-                       interval: float = 60.0) -> None:
+                       interval: float = 30.0,
+                       grace_period: float = 180.0) -> None:
     """Periodically verify the instance remains listed in the public lobby.
 
-    If the listing is lost (proxy failure, etc.), set stop_event to signal
-    the main loop to restart. Never raises.
+    Fires only after HEALTH_MISS_STRIKES consecutive *successful* fetches
+    that lack our ID. Fetch failures reset the count (unknown != lost).
+    No checks during grace_period after startup (propagation delay).
+    Never raises.
     """
+    start = time.time()
+    misses = 0
     while not stop_event.is_set():
         stop_event.wait(interval)
         if stop_event.is_set():
             break
+        if time.time() - start < grace_period:
+            continue
         try:
-            games = lobby_mitm.list_lobby_games()
-            listed = any(g.get("id") == lobby_id for g in games)
-        except Exception:
-            listed = False
-        if not listed:
+            games = lobby_mitm.list_lobby_games(strict=True)
+        except Exception as e:
+            log("HEALTH", f"list fetch failed ({e}); ignoring, strikes reset.")
+            misses = 0
+            continue
+        if any(g.get("id") == lobby_id for g in games):
+            misses = 0
+            continue
+        misses += 1
+        log("HEALTH", f"listing {lobby_id} absent ({misses}/{HEALTH_MISS_STRIKES}).")
+        if misses >= HEALTH_MISS_STRIKES:
             log("HEALTH", f"Lobby listing {lobby_id} lost; triggering restart.")
             stop_event.set()
             break
@@ -1243,8 +1265,18 @@ def maybe_spawn_crash_replacement(reason: str = "crashed") -> None:
         log("WARN", f"Public list check failed ({e}); spawning replacement anyway.")
         others = []
     if others:
-        log("WARN", f"Lobby already covered by {others}; not spawning replacement.")
-        return
+        # Coverage sightings race dying sessions (listing lingers after the
+        # owner exits). Re-check once after a delay before giving up.
+        log("WARN", f"Lobby covered by {others}; re-checking in {RESPAWN_COVERAGE_RECHECK_SECONDS}s before giving up.")
+        time.sleep(RESPAWN_COVERAGE_RECHECK_SECONDS)
+        try:
+            others = family_listing_ids(exclude_id=lobby_id)
+        except Exception as e:
+            log("WARN", f"Public list re-check failed ({e}); spawning replacement anyway.")
+            others = []
+        if others:
+            log("WARN", f"Lobby still covered by {others}; not spawning replacement.")
+            return
     if reason == "game-ended":
         log("INFO", "Game ended (process exited). Spawning replacement lobby.")
     else:
@@ -2660,10 +2692,11 @@ def main():
             # Periodic health check: verify we remain listed in the lobby.
             # If the proxy breaks mid-session, the instance goes dark and
             # new players can't find us. Restart if listing is lost.
+            # Strikes + grace live in _health_check_loop; no single-blip kills.
             health_stop = threading.Event()
             health_thread = threading.Thread(
                 target=_health_check_loop,
-                args=(lobby_id, health_stop, 60.0),
+                args=(lobby_id, health_stop),
                 daemon=True, name="lobby-health",
             )
             health_thread.start()
